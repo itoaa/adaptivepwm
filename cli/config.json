@@ -1,0 +1,23 @@
+{
+  "pwm_frequency": 20000,
+  "max_duty_cycle": 0.95,
+  "min_duty_cycle": 0.05,
+  "target_efficiency": 0.95,
+  "sampling_rate": 100,
+  "safety_limits": {
+    "max_temperature": 85,
+    "max_current": 10.0,
+    "max_voltage": 24.0
+  },
+  "pki": {
+    "cert_path": "pki/client.crt",
+    "key_path": "pki/client.key",
+    "ca_path": "pki/ca.crt",
+    "require_auth": true
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "logs/pwm.log",
+    "max_size": "10MB"
+  }
+}

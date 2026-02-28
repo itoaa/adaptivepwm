@@ -1,0 +1,35 @@
+site_name: AdaptivePWM Documentation
+site_url: https://example.com/adaptivepwm
+repo_url: https://github.com/yourusername/AdaptivePWM
+repo_name: GitHub
+
+nav:
+  - Home: index.md
+  - Design: design.md
+  - API Reference: api.md
+  - Safety: safety.md
+
+theme:
+  name: material
+  palette:
+    primary: blue
+    accent: amber
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - admonition
+  - codehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed
+  - pymdownx.details
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/yourusername/AdaptivePWM

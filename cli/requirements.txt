@@ -1,0 +1,19 @@
+# AdaptivePWM CLI Requirements
+# ============================
+#
+# Core dependencies for the CLI tool
+#
+
+# No external dependencies required for basic functionality
+# The CLI uses only Python standard library modules:
+# - argparse for command-line parsing
+# - json for configuration handling
+# - os for file operations
+# - sys for system interactions
+# - datetime for timestamps
+# - typing for type hints
+
+# For extended functionality (optional):
+# - pyOpenSSL (for real PKI operations)
+# - requests (for remote API communication)
+# - cryptography (for advanced crypto operations)
