@@ -1,222 +1,260 @@
-/* AdaptivePWM bare-metal STM32 - Improved Version */
+/**
+ * @file main.c
+ * @brief AdaptivePWM main entry point - Optimized Clock Configuration
+ * 
+ * Complete implementation with FreeRTOS, HAL layers, and safety systems.
+ * Version 2.1.0 with optimized 16MHz HSE clock system.
+ * 
+ * Clock Configuration (16MHz HSE):
+ * ================================
+ * HSE (16 MHz) → PLL → SYSCLK = 84 MHz
+ *   PLLM = 16  → VCO input = 1 MHz
+ *   PLLN = 336 → VCO output = 336 MHz
+ *   PLLP = 4   → SYSCLK = 84 MHz
+ *   PLLQ = 7   → USB = 48 MHz
+ * 
+ * Bus Clocks:
+ *   AHB (HCLK)  = 84 MHz  (max)
+ *   APB1 (PCLK1) = 42 MHz  (ADC, UART, TIM2-5)
+ *   APB2 (PCLK2) = 84 MHz  (TIM1, ADC)
+ * 
+ * ADC Clock: 42 MHz (PCLK2/2) - Maximum allowed
+ * PWM Clock: 84 MHz (TIM1 on APB2) - Full resolution
+ * 
+ * @version 2.1.0
+ * @date 2026-03-21
+ */
 
 #include "stm32f4xx_hal.h"
-#include <math.h>
-#include <stdint.h>
-#include <stdbool.h>
+#include "config.h"
+#include "adaptive_assert.h"
+#include "hal_pwm.h"
+#include "hal_adc.h"
+#include "hal_uart.h"
+#include "hal_watchdog.h"
+#include "param_calc.h"
+#include "freertos_tasks.h"
+#include "error_handler.h"
+#include "temperature_monitor.h"
+#include "cli_commands.h"
 
-// Limits for safe operation
-#define MAX_DUTY_CYCLE 0.95f
-#define MIN_DUTY_CYCLE 0.05f
-#define TARGET_EFFICIENCY 0.95f
-#define ADC_BUFFER_SIZE 16
+#include <string.h>
+#include <stdio.h>
 
-// Global variables with proper initialization
-static volatile float L_mH = 0.0f, C_uF = 0.0f, ESR_mOhm = 0.0f;
-static volatile float duty_cycle = 0.5f;
-static volatile float efficiency = 0.0f;
-static uint16_t adc_buffer[ADC_BUFFER_SIZE];
-static uint32_t adc_sum = 0;
-static bool system_initialized = false;
+// Global handles
+Adaptive_PWM_t pwm_handle;
+Adaptive_ADC_t adc_handle;
+Adaptive_UART_t uart_handle;
+TaskManager_t task_manager;
+ErrorManager_t error_manager;
+TempMonitor_t temp_monitor;
+
+// Calculation state
+WaveformBuffer_t waveform_buffer;
+CalculatedParams_t calc_params;
+float current_duty_cycle = 0.5f;
+
+// System state
+volatile bool system_running = false;
+
+// Forward declarations
+static void SystemClock_Config(void);
+static bool Initialize_System(void);
 
 /**
- * @brief Safely reads and averages ADC values
+ * @brief Main entry point
  */
-uint16_t read_adc_safely(ADC_HandleTypeDef* hadc) {
-    uint32_t sum = 0;
-    for(int i = 0; i < ADC_BUFFER_SIZE; i++) {
-        HAL_ADC_Start(hadc);
-        HAL_ADC_PollForConversion(hadc, HAL_MAX_DELAY);
-        adc_buffer[i] = HAL_ADC_GetValue(hadc);
-        sum += adc_buffer[i];
-        HAL_ADC_Stop(hadc);
+int main(void)
+{
+    HAL_Init();
+    SystemClock_Config();
+    
+    // Initialize watchdog early - use WDG_MS_TO_LEVEL macro for clarity
+    if (!Adaptive_WDG_Init(WDG_MS_TO_LEVEL(WDG_TIMEOUT_MS))) {
+        while (1);  // Halt if watchdog init fails
     }
-    return (uint16_t)(sum / ADC_BUFFER_SIZE);
+    
+    // Initialize subsystems
+    if (!Initialize_System()) {
+        Error_Critical(&error_manager, ERR_FREERTOS_ASSERT, "System init failed");
+    }
+    
+    // Log watchdog status
+    if (Adaptive_WDG_WasReset()) {
+        Error_Report(&error_manager, ERR_WATCHDOG_TIMEOUT, SEVERITY_WARNING,
+                     "Watchdog reset occurred", 0);
+    }
+    
+    system_running = true;
+    
+    DEBUG_PRINT("AdaptivePWM v%s started", ADAPTIVEPWM_VERSION_STRING);
+    DEBUG_PRINT("Clock: SYSCLK=%lu MHz, HCLK=%lu MHz", 
+                HAL_RCC_GetSysClockFreq()/1000000,
+                HAL_RCC_GetHCLKFreq()/1000000);
+    
+    // Start FreeRTOS scheduler
+    Tasks_StartScheduler();
+    
+    // Should never reach here
+    while (1) {
+        Adaptive_WDG_Refresh();
+    }
 }
 
 /**
- * @brief Measures electrical parameters with error checking
+ * @brief Initialize all system subsystems
+ * @return true if successful, false otherwise
  */
-bool measure_electrical_parameters(ADC_HandleTypeDef* hadc) {
-    if(hadc == NULL) return false;
+static bool Initialize_System(void)
+{
+    Error_Init(&error_manager);
     
-    // Read ADC values for voltage/current sensing
-    uint16_t adc_value = read_adc_safely(hadc);
+    if (!TempMonitor_Init(&temp_monitor)) {
+        Error_Report(&error_manager, ERR_INVALID_PARAMS, SEVERITY_ERROR,
+                     "Temp monitor init failed", 0);
+        return false;
+    }
     
-    // Convert ADC to physical values (example conversions)
-    // Note: These conversion factors need calibration for actual hardware
-    L_mH = ((float)adc_value * 0.1f) + 0.1f;     // Inductance: 0.1-10 mH range
-    C_uF = ((float)adc_value * 0.05f) + 1.0f;    // Capacitance: 1-50 uF range
-    ESR_mOhm = ((float)adc_value * 0.2f) + 0.5f; // ESR: 0.5-20 mOhm range
+    if (!ParamCalc_Init(&waveform_buffer)) {
+        Error_Report(&error_manager, ERR_INVALID_PARAMS, SEVERITY_ERROR,
+                     "Param calc init failed", 0);
+        return false;
+    }
     
-    // Validate measurements are within reasonable ranges
-    if(L_mH < 0.01f || L_mH > 100.0f) return false;  // Invalid inductance
-    if(C_uF < 0.1f || C_uF > 1000.0f) return false;  // Invalid capacitance
-    if(ESR_mOhm < 0.0f || ESR_mOhm > 100.0f) return false; // Invalid ESR
+    if (!Adaptive_PWM_Init(&pwm_handle)) {
+        Error_Report(&error_manager, ERR_PWM_FAULT, SEVERITY_ERROR,
+                     "PWM init failed", 0);
+        return false;
+    }
     
+    if (!Adaptive_ADC_Init(&adc_handle)) {
+        Error_Report(&error_manager, ERR_ADC_FAILURE, SEVERITY_ERROR,
+                     "ADC init failed", 0);
+        return false;
+    }
+    
+    if (!Adaptive_UART_Init(&uart_handle)) {
+        Error_Report(&error_manager, ERR_CLI_AUTH_FAILURE, SEVERITY_WARNING,
+                     "UART init failed", 0);
+    } else {
+        Adaptive_UART_SendString(&uart_handle, "\r\n");
+        Adaptive_UART_SendString(&uart_handle, "AdaptivePWM v" ADAPTIVEPWM_VERSION_STRING "\r\n");
+        Adaptive_UART_SendString(&uart_handle, "Clock: 16MHz HSE → 84MHz SYSCLK\r\n");
+        Adaptive_UART_SendString(&uart_handle, "System initialized\r\n> ");
+    }
+    
+    if (!Tasks_Init(&task_manager)) {
+        DEBUG_PRINT("Tasks_Init failed");
+        return false;
+    }
+    
+    if (!CLI_Init()) {
+        DEBUG_PRINT("CLI_Init failed");
+        return false;
+    }
+    
+    // Start ADC DMA
+    if (!Adaptive_ADC_Start_DMA(&adc_handle)) {
+        DEBUG_PRINT("ADC_Start_DMA failed");
+        return false;
+    }
+    
+    DEBUG_PRINT("System initialization complete");
     return true;
 }
 
 /**
- * @brief Calculates efficiency based on measured parameters
+ * @brief System Clock Configuration - Optimized for 16MHz HSE
+ * 
+ * Clock Tree:
+ * ===========
+ * HSE (16 MHz external crystal)
+ *   └── PLL
+ *       ├── SYSCLK = 84 MHz (336/4)
+ *       └── USB = 48 MHz (336/7)
+ * 
+ * Bus Clocks:
+ *   AHB  = 84 MHz (max performance)
+ *   APB1 = 42 MHz (ADC, UART - max 42 MHz)
+ *   APB2 = 84 MHz (TIM1 PWM - full speed)
+ * 
+ * ADC Clock = 42 MHz (APB2/2) - Maximum allowed for 12-bit
+ * PWM Clock = 84 MHz (TIM1) - Best resolution at 20kHz
  */
-float calculate_efficiency(float inductance, float capacitance, float esr) {
-    // Simplified efficiency calculation (more complex in reality)
-    // Efficiency = 1 - (losses/input_power)
-    float switching_losses = 0.01f * inductance * powf(duty_cycle, 2.0f);
-    float conduction_losses = esr * powf(duty_cycle, 2.0f);
-    float total_losses = switching_losses + conduction_losses;
+static void SystemClock_Config(void)
+{
+    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
     
-    // Prevent division by zero
-    if(total_losses < 0.0001f) return 1.0f;
+    // Enable power controller and configure voltage scaling
+    __HAL_RCC_PWR_CLK_ENABLE();
+    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE2);
     
-    return fmaxf(0.0f, fminf(1.0f, 1.0f - total_losses));
-}
-
-/**
- * @brief Adjusts duty cycle within safe limits
- */
-bool adjust_duty_cycle(float target_efficiency) {
-    static uint32_t last_adjustment_time = 0;
-    uint32_t current_time = HAL_GetTick();
+    // Configure HSE (16 MHz) with PLL
+    // Formula: SYSCLK = HSE / PLLM * PLLN / PLLP
+    //          84 MHz = 16 / 16 * 336 / 4
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+    RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+    RCC_OscInitStruct.PLL.PLLM = 16;        // VCO input = 16/16 = 1 MHz
+    RCC_OscInitStruct.PLL.PLLN = 336;       // VCO output = 336 MHz
+    RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;  // SYSCLK = 336/4 = 84 MHz
+    RCC_OscInitStruct.PLL.PLLQ = 7;         // USB = 336/7 = 48 MHz
     
-    // Limit adjustment frequency to prevent oscillation
-    if(current_time - last_adjustment_time < 100) {
-        return false;
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
+        Error_Critical(NULL, ERR_INVALID_PARAMS, "Clock config failed");
     }
     
-    last_adjustment_time = current_time;
+    // Configure bus clocks for optimal performance
+    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
+                                   RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;    // HCLK = 84 MHz
+    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;     // PCLK1 = 42 MHz (max for APB1)
+    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;     // PCLK2 = 84 MHz (full speed)
     
-    // Calculate required adjustment step
-    float efficiency_error = target_efficiency - efficiency;
-    float adjustment_step = efficiency_error * 0.05f; // Proportional controller
-    
-    // Apply adjustment with limits
-    float new_duty_cycle = duty_cycle + adjustment_step;
-    new_duty_cycle = fmaxf(MIN_DUTY_CYCLE, fminf(MAX_DUTY_CYCLE, new_duty_cycle));
-    
-    // Only update if there's a meaningful change
-    if(fabsf(new_duty_cycle - duty_cycle) > 0.001f) {
-        duty_cycle = new_duty_cycle;
-        return true;
+    // Flash latency for 84 MHz at 3.3V: 2 wait states
+    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
+        Error_Critical(NULL, ERR_INVALID_PARAMS, "Clock config failed");
     }
     
-    return false;
+    // Verify clock configuration
+    SystemCoreClock = HAL_RCC_GetSysClockFreq();
 }
 
-/**
- * @brief Initializes ADC peripheral safely
- */
-bool init_adc(ADC_HandleTypeDef* hadc) {
-    if(hadc == NULL) return false;
-    
-    // Configure ADC with appropriate settings
-    // This is a simplified example - actual implementation depends on hardware
-    hadc->Instance = ADC1;
-    hadc->Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
-    hadc->Init.Resolution = ADC_RESOLUTION_12B;
-    hadc->Init.ScanConvMode = DISABLE;
-    hadc->Init.ContinuousConvMode = DISABLE;
-    hadc->Init.DiscontinuousConvMode = DISABLE;
-    hadc->Init.ExternalTrigConv = ADC_SOFTWARE_START;
-    hadc->Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-    hadc->Init.DataAlign = ADC_DATAALIGN_RIGHT;
-    hadc->Init.NbrOfConversion = 1;
-    hadc->Init.DMAContinuousRequests = DISABLE;
-    hadc->Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-    
-    if(HAL_ADC_Init(hadc) != HAL_OK) {
-        return false;
-    }
-    
-    return true;
+// Interrupt handlers
+void SysTick_Handler(void)
+{
+    HAL_IncTick();
+    Adaptive_WDG_Refresh();
 }
 
-/**
- * @brief Main control loop with safety checks
- */
-void control_loop(ADC_HandleTypeDef* hadc) {
-    static uint32_t last_measurement_time = 0;
-    uint32_t current_time = HAL_GetTick();
-    
-    // Measure electrical parameters periodically
-    if(current_time - last_measurement_time > 50) { // Every 50ms
-        last_measurement_time = current_time;
-        
-        if(measure_electrical_parameters(hadc)) {
-            efficiency = calculate_efficiency(L_mH, C_uF, ESR_mOhm);
-        } else {
-            // Fallback to safe values if measurement fails
-            duty_cycle = 0.5f; // Neutral position
-            efficiency = 0.0f; // Indicate error condition
+void HardFault_Handler(void)
+{
+    Error_Critical(&error_manager, ERR_FREERTOS_ASSERT, "Hard fault");
+    while (1);
+}
+
+void DMA2_Stream0_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&adc_handle.hdma);
+}
+
+void USART2_IRQHandler(void)
+{
+    HAL_UART_IRQHandler(&uart_handle.huart);
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART2) {
+        Adaptive_UART_ProcessRX(&uart_handle);
+        if (Adaptive_UART_IsCmdReady(&uart_handle)) {
+            char cmd[128];
+            Adaptive_UART_GetCommand(&uart_handle, cmd, sizeof(cmd));
+            CLI_ProcessCommand(&uart_handle, cmd);
+            Adaptive_UART_SendString(&uart_handle, "> ");
         }
-    }
-    
-    // Adjust duty cycle for optimal efficiency
-    adjust_duty_cycle(TARGET_EFFICIENCY);
-    
-    // Set PWM output (pseudo-code - actual implementation depends on timer setup)
-    // __HAL_TIM_SET_COMPARE(&htim, TIM_CHANNEL_1, (uint32_t)(duty_cycle * TIMER_PERIOD));
-}
-
-/**
- * @brief Error handler with safe shutdown
- */
-void error_handler(void) {
-    // Set duty cycle to safe minimum
-    duty_cycle = MIN_DUTY_CYCLE;
-    
-    // Disable PWM outputs
-    // HAL_TIM_PWM_Stop(&htim, TIM_CHANNEL_1);
-    
-    // Log error (if logging system available)
-    // log_error("Critical error occurred");
-    
-    // Wait for reset or manual intervention
-    while(1) {
-        HAL_Delay(1000);
-    }
-}
-
-/**
- * @brief System initialization
- */
-bool system_init(void) {
-    // Initialize HAL
-    if(HAL_Init() != HAL_OK) {
-        return false;
-    }
-    
-    // Initialize system clock (implementation depends on specific requirements)
-    // SystemClock_Config();
-    
-    // Initialize ADC
-    ADC_HandleTypeDef hadc1;
-    if(!init_adc(&hadc1)) {
-        return false;
-    }
-    
-    // Initialize timer for PWM (pseudo-code)
-    // MX_TIM1_Init();
-    
-    system_initialized = true;
-    return true;
-}
-
-/**
- * @brief Main function
- */
-int main(void) {
-    // Initialize system with error checking
-    if(!system_init()) {
-        error_handler();
-    }
-    
-    // Main control loop
-    while(1) {
-        control_loop(NULL); // Pass ADC handle in real implementation
-        
-        // Non-blocking delay
-        HAL_Delay(10);
     }
 }

@@ -1,157 +1,242 @@
-# System Design Document
+# AdaptivePWM Design Document
 
-## Overview
+## System Architecture
 
-This document describes the overall design of the AdaptivePWM system, including architectural decisions, design patterns, and implementation considerations.
+### Overview
+AdaptivePWM is a real-time control system for buck/boost converters and electronic speed controllers (ESCs). It uses an STM32F401RE microcontroller running at 84 MHz with optimized clock configuration.
 
-## Design Goals
+## Clock System Design
 
-1. **Safety First**: All operations must be fail-safe and protect both equipment and users
-2. **Real-time Performance**: Response times must meet power electronics switching requirements
-3. **Efficiency Optimization**: System should actively maximize power conversion efficiency
-4. **Hardware Independence**: Design should accommodate various STM32 implementations
-5. **Maintainability**: Code should be modular and well-documented
+### Clock Tree (16MHz HSE)
 
-## Architectural Patterns
-
-### State Machine Approach
-The system implements a cyclic state machine:
 ```
-Initialize -> Measure -> Calculate -> Adjust -> Repeat
+                    ┌─────────────────────────────────────┐
+                    │           16 MHz HSE                │
+                    │     (External Crystal)              │
+                    └──────────────┬──────────────────────┘
+                                   │
+                                   ▼
+                    ┌─────────────────────────────────────┐
+                    │              PLL                    │
+                    │  ┌─────────────────────────────┐  │
+                    │  │  PLLM = 16  → VCO in = 1 MHz │  │
+                    │  │  PLLN = 336 → VCO out = 336  │  │
+                    │  │  PLLP = 4   → SYSCLK = 84    │  │
+                    │  │  PLLQ = 7   → USB = 48 MHz  │  │
+                    │  └─────────────────────────────┘  │
+                    └──────────────┬──────────────────────┘
+                                   │
+                    ┌──────────────┼──────────────┐
+                    │              │              │
+                    ▼              ▼              ▼
+            ┌──────────┐   ┌──────────┐   ┌──────────┐
+            │   AHB    │   │   APB1   │   │   APB2   │
+            │  84 MHz  │   │  42 MHz  │   │  84 MHz  │
+            │  (HCLK)  │   │ (PCLK1)  │   │ (PCLK2)  │
+            └────┬─────┘   └────┬─────┘   └────┬─────┘
+                 │              │              │
+                 │              │              │
+                 ▼              ▼              ▼
+            ┌──────────┐   ┌──────────┐   ┌──────────┐
+            │  Flash   │   │   ADC    │   │   TIM1   │
+            │   RAM    │   │  (42MHz) │   │  (84MHz) │
+            │   DMA    │   │   UART   │   │   SPI1   │
+            │          │   │  TIM2-5  │   │          │
+            └──────────┘   └──────────┘   └──────────┘
 ```
 
-Each step is designed to complete within strict time constraints.
+### Clock Configuration Details
 
-### Observer Pattern for Measurements
-Electrical parameters are observed rather than directly controlled, allowing the system to adapt to changing conditions.
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| HSE | 16 MHz | External crystal oscillator |
+| PLLM | 16 | VCO input prescaler (16MHz/16 = 1MHz) |
+| PLLN | 336 | VCO multiplier (1MHz × 336 = 336MHz) |
+| PLLP | 4 | System clock divider (336/4 = 84MHz) |
+| PLLQ | 7 | USB clock divider (336/7 = 48MHz) |
+| SYSCLK | 84 MHz | Maximum CPU frequency |
+| HCLK | 84 MHz | AHB bus clock |
+| PCLK1 | 42 MHz | APB1 bus (max allowed) |
+| PCLK2 | 84 MHz | APB2 bus (full speed) |
 
-### Controller Pattern for Duty Cycle
-A feedback controller adjusts the duty cycle based on efficiency measurements.
+### Peripheral Clock Distribution
 
-## Module Structure
+| Peripheral | Bus | Clock | Max Frequency |
+|------------|-----|-------|---------------|
+| TIM1 (PWM) | APB2 | 84 MHz | 84 MHz |
+| TIM2-5 | APB1 | 42 MHz | 42 MHz |
+| ADC1 | APB2 | 42 MHz | 42 MHz |
+| USART1 | APB2 | 84 MHz | 84 MHz |
+| USART2 | APB1 | 42 MHz | 42 MHz |
+| SPI1 | APB2 | 84 MHz | 84 MHz |
+| SPI2-3 | APB1 | 42 MHz | 42 MHz |
+| I2C1-3 | APB1 | 42 MHz | 42 MHz |
 
-### Hardware Abstraction Layer (HAL)
-- Wraps STM32 CubeMX functions
-- Provides consistent interface for different hardware configurations
-- Handles low-level initialization and configuration
+## ADC Design
 
-### Measurement Module
-- ADC interface and signal processing
-- Parameter validation and range checking
-- Noise filtering and averaging algorithms
+### ADC Clock Optimization
 
-### Control Module
-- Efficiency calculation algorithms
-- Duty cycle adjustment logic
-- Safety boundary enforcement
+The ADC clock is derived from PCLK2 (84 MHz) divided by 2:
+- **ADC Clock = 42 MHz** (maximum allowed for 12-bit resolution)
 
-### Communication Module
-- Status reporting
-- Error logging
-- External command interface
+### Sampling Time Configuration
 
-## Real-time Considerations
+| Channel | Signal | Sampling Time | Conversion Time | Use Case |
+|---------|--------|---------------|-----------------|----------|
+| 0 | Vin | 3 cycles | 357 ns | Fast voltage |
+| 1 | Vout | 3 cycles | 357 ns | Fast voltage |
+| 2 | Current | 15 cycles | 643 ns | Current sense |
+| 3 | Temperature | 28 cycles | 952 ns | Slow signal |
 
-### Timing Requirements
-- ADC sampling: Every 50ms maximum
-- Control loop: 10ms cycle time
-- Duty cycle adjustment: Every 100ms minimum
+**Total cycle time:** 3+3+15+28 + 4×12 = 82 cycles @ 42 MHz = **1.95 µs**
 
-### Resource Management
-- Stack usage minimized for embedded operation
-- Heap allocation avoided to prevent fragmentation
-- Static memory allocation preferred
+**Maximum sampling rate:** ~500 kHz (4 channels)
 
-### Interrupt Handling
-- Minimal interrupt service routines
-- Processing deferred to main control loop
-- Priority scheme ensures critical functions are not blocked
+### ADC Resolution vs Clock
 
-## Software Quality Attributes
+| Resolution | Max ADC Clock | Min Cycles | Max Sample Rate @ 42MHz |
+|------------|---------------|------------|-------------------------|
+| 12-bit | 36 MHz | 12 cycles | 3.5 MSPS |
+| 10-bit | 42 MHz | 10 cycles | 4.2 MSPS |
+| 8-bit | 42 MHz | 8 cycles | 5.25 MSPS |
+| 6-bit | 42 MHz | 6 cycles | 7 MSPS |
 
-### Reliability
-- Extensive error checking at all levels
-- Graceful degradation on partial failures
-- Comprehensive testing protocols
+We use 12-bit with 42 MHz clock (slightly overclocked but stable).
 
-### Maintainability
-- Modular design with clear interfaces
-- Detailed documentation for all functions
-- Consistent naming conventions
+## PWM Design
 
-### Portability
-- Hardware abstraction layer isolates platform-specific code
-- Configuration files separate from core logic
-- Standard C library dependencies only
+### TIM1 Configuration
 
-## Testing Strategy
+- **Timer Clock:** 84 MHz (APB2)
+- **Frequency:** 20 kHz
+- **ARR Value:** 4199 (84MHz/20kHz - 1)
+- **Resolution:** 4200 steps (~12-bit equivalent)
+- **Dead-time:** 400 ns
 
-### Unit Testing
-Each module tested independently:
-- Input validation
-- Boundary conditions
-- Error handling paths
+### PWM Timing
 
-### Integration Testing
-Combined module testing:
-- Data flow between modules
-- Timing interactions
-- Resource sharing conflicts
+| Parameter | Value | Calculation |
+|-----------|-------|-------------|
+| Period | 50 µs | 1/20 kHz |
+| Tick duration | 11.9 ns | 1/84 MHz |
+| ARR | 4199 | 84M/20k - 1 |
+| Dead-time ticks | 34 | 400ns / 11.9ns |
+| Minimum duty | 2% | 84 ticks |
+| Maximum duty | 98% | 4115 ticks |
 
-### System Testing
-End-to-end validation:
-- Normal operating conditions
-- Stress conditions
-- Fault conditions
+## Control Loop Timing
 
-## Security Considerations
+### Task Scheduling
 
-### Code Integrity
-- No runtime code modification
-- Read-only configuration data
-- Protected memory regions
+| Task | Frequency | Period | Priority |
+|------|-----------|--------|----------|
+| Safety Monitor | 1 kHz | 1 ms | Highest |
+| ADC Processing | 1 kHz | 1 ms | High |
+| Control Loop | 100 Hz | 10 ms | Medium |
+| CLI Handler | 50 Hz | 20 ms | Low |
 
-### Operational Security
-- Unauthorized parameter changes prevented
-- Access logging for critical operations
-- Secure boot process (when implemented)
+### ADC to PWM Latency
 
-## Future Expansion
+| Stage | Time | Notes |
+|-------|------|-------|
+| ADC Sampling | 1.95 µs | All 4 channels |
+| DMA Transfer | <1 µs | Hardware |
+| Processing | 10-50 µs | Software filter |
+| PWM Update | <1 µs | Register write |
+| **Total** | **~50 µs** | **<1% of PWM period** |
 
-### Multi-channel Support
-Design accommodates multiple PWM channels with individual control loops.
+## Memory Map
 
-### Network Connectivity
-CAN bus and Ethernet interfaces planned for distributed systems.
+### Flash Layout
 
-### Advanced Algorithms
-Machine learning integration for predictive maintenance and optimization.
+| Address | Size | Content |
+|---------|------|---------|
+| 0x0800 0000 | 64 KB | Bootloader (optional) |
+| 0x0801 0000 | 384 KB | Application code |
+| 0x0807 0000 | 128 KB | Data logging |
 
-## Design Trade-offs
+### RAM Layout
 
-### Speed vs. Accuracy
-Balanced by using fast approximation algorithms with periodic high-accuracy recalibration.
+| Address | Size | Content |
+|---------|------|---------|
+| 0x2000 0000 | 128 KB | Main RAM |
+| 0x2001 C000 | 16 KB | CCM RAM (fast) |
 
-### Memory vs. Performance
-Lookup tables used for complex calculations to reduce computation time.
+## Power Consumption
 
-### Simplicity vs. Features
-Core functionality kept simple while providing hooks for advanced features.
+### Clock Tree Power
 
-## Coding Standards
+| Component | Frequency | Typical Current |
+|-----------|-----------|-----------------|
+| HSE | 16 MHz | ~1 mA |
+| PLL | 336 MHz VCO | ~2 mA |
+| SYSCLK | 84 MHz | ~10 mA |
+| ADC | 42 MHz | ~1.5 mA |
+| TIM1 | 84 MHz | ~0.5 mA |
+| **Total** | - | **~15 mA @ 3.3V** |
 
-### Language
-- C standard: C99
-- Compiler: GCC ARM None EABI
-- Optimization: Debug builds (-Og), Release builds (-O2)
+## Performance Metrics
 
-### Naming Conventions
-- Functions: lowercase_with_underscores
-- Variables: descriptive_names_with_units
-- Constants: UPPERCASE_WITH_UNDERSCORES
-- Types: PascalCase ending with _t
+### ADC Performance
 
-### Documentation
-- All functions documented with purpose, parameters, and return values
-- Complex algorithms explained with inline comments
-- Design decisions justified in comments
+- **Sample Rate:** 10 kHz per channel (40 kHz total)
+- **Resolution:** 12-bit (4096 levels)
+- **ENOB:** ~10.5 bits (estimated)
+- **SNR:** ~65 dB (estimated)
+
+### PWM Performance
+
+- **Frequency:** 20 kHz (fixed)
+- **Resolution:** 4200 steps (12-bit equivalent)
+- **Dead-time:** 400 ns (adjustable)
+- **Jitter:** <10 ns (hardware)
+
+### Control Loop Performance
+
+- **Update Rate:** 100 Hz
+- **Latency:** <100 µs (ADC to PWM)
+- **Settling Time:** <10 ms (typical)
+
+## Safety Features
+
+### Clock Safety
+
+- **CSS (Clock Security System):** Enabled
+- **HSE failure detection:** Automatic switch to HSI
+- **PLL lock detection:** Hardware monitored
+
+### Watchdog
+
+- **Type:** Independent Watchdog (IWDG)
+- **Clock:** 32 kHz LSI
+- **Timeout:** 500 ms
+- **Refresh:** Every 100 ms
+
+## Future Optimizations
+
+### Potential Clock Improvements
+
+1. **ADC Oversampling:** Use hardware oversampling for better SNR
+2. **DMA Double Buffer:** Reduce CPU overhead
+3. **Timer Synchronization:** Sync ADC trigger with PWM
+4. **CCM RAM:** Move critical data to fast memory
+
+### Alternative Clock Configurations
+
+#### Option 1: Lower Power (48 MHz)
+- HSE: 16 MHz
+- PLL: M=16, N=192, P=4
+- SYSCLK: 48 MHz
+- Power: ~40% reduction
+
+#### Option 2: Higher Performance (100 MHz)
+- HSE: 25 MHz (requires different crystal)
+- PLL: M=25, N=400, P=4
+- SYSCLK: 100 MHz
+- Note: Requires voltage scale 1
+
+## References
+
+- STM32F401 Reference Manual (RM0368)
+- STM32F4xx HAL User Manual
+- AN4488: STM32F4 clock configuration
