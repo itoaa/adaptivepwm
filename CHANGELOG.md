@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.1] - 2026-03-22
+
+### Security & Safety Framework v1.1.0
+
+#### Added (Framework Enhancement)
+- **Project Overview:** Added Section 0 with complete project context, safety justification, and risk analysis
+- **Threat Model:** Created `docs/security/threat-model.md` with STRIDE analysis
+- **New Security Requirements:**
+  - SR-006: PWM rate-of-change limiting (±5%/10ms)
+  - SR-007: Thermal runaway protection (dT/dt monitoring)
+  - SR-008: Over-current/short-circuit detection
+- **MISRA Deviation Register:** Appendix D for approved deviations
+- **Approved Tools List:** Appendix E with version pinning
+
+#### Changed (Standards Alignment)
+- **Framework Title:** Changed to "Security & Safety Framework (IEC 61508 + IEC 62443 aligned)"
+- **Standards:** Updated from CISSP-aligned to IEC 61508 SIL 2 + IEC 62443 SL-2 + CERT C
+- **CISSP:** Now referenced as "inspiration" rather than compliance
+- **Risk Justification:** Added Section 0.4 explaining all safety thresholds
+
+#### Added (Developer Experience)
+- **Code Formatting:** `.clang-format` with MISRA-compatible style
+- **Editor Config:** `.editorconfig` for consistent formatting
+- **Config Directory:** `config/` for platform-specific settings
+- **LICENSE:** MIT License with safety-critical disclaimer
+
+#### Security Impact
+- **Level:** Medium
+- **Description:** Enhanced threat modeling and safety requirements
+- **Justification:** Improves traceability and audit readiness for SIL 2
+
+---
+
 ## [2.1.0] - 2026-03-21
 
 ### Security (CISSP-Aligned)
@@ -48,21 +81,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Control Loop:** 100 Hz efficiency optimization
 - **Parameter Calculation:** Real-time L/C/ESR calculation
 - **Error Handling:** Multi-level error management
-- **Watchdog:** Basic watchdog implementation
-
----
-
-## [1.0.0] - 2026-02-20
-
-### Added
-- Initial project structure
-- Basic HAL abstraction layer
-- CMake/PlatformIO build system
-- Unit test framework
 
 ---
 
 ## Security Advisory
+
+### [SEC-2026-03-22-001] Framework Enhancement
+**Severity:** Medium  
+**Description:** Added comprehensive threat modeling and safety requirements to support SIL 2 alignment.  
+**Fix:** Implemented STRIDE threat model, new SR requirements, and deviation register.  
+**CVSS:** 4.3 (AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L)
 
 ### [SEC-2026-03-21-001] Clock System Hardening
 **Severity:** Medium  
@@ -74,19 +102,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Compliance Notes
 
-### CISSP Framework Alignment
-- Domain 3 (Security Architecture): Clock CSS, Watchdog
-- Domain 8 (Software Development): Input validation, fail-safes
+### IEC 61508 / IEC 62443 Framework Alignment
+- **IEC 61508:** SIL 2 concepts applied (partial compliance)
+- **IEC 62443:** SL-2 security level
+- **CERT C:** Secure coding standard
+- **MISRA-C:2012:** Partial compliance with deviation register
 
 ### Standards Compliance
-- MISRA-C:2012 (partial)
-- IEC 61508 concepts (safety)
+- IEC 61508 (functional safety) - concepts
+- IEC 62443 (industrial security) - SL-2
+- CERT C (secure coding)
+- MISRA-C:2012 (coding standard) - with deviations
 
 ---
 
 ## Migration Guide
 
-### From v2.0.0 to v2.1.0
+### From v2.1.0 to v2.1.1
+
+1. **Framework:** Review updated PROJECT_FRAMEWORK.md Section 0
+2. **Threat Model:** Read docs/security/threat-model.md
+3. **Code Style:** Install .clang-format in your editor
+4. **Tools:** Verify toolchain versions match Appendix E
+
+### From v2.0.0 to v2.1.x
 
 1. **Hardware:** Ensure 16 MHz HSE crystal is installed
 2. **Clock:** Review new clock configuration in `main.c`
@@ -103,6 +142,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Resolved
 - ✓ Clock optimization completed (v2.1.0)
 - ✓ Documentation framework implemented (v2.1.0)
+- ✓ Threat modeling added (v2.1.1)
+- ✓ MISRA deviation register added (v2.1.1)
 
 ---
 
@@ -117,4 +158,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - [Project Framework](PROJECT_FRAMEWORK.md)
 - [Security Documentation](docs/safety.md)
+- [Threat Model](docs/security/threat-model.md)
 - [Clock Design](docs/design.md)
