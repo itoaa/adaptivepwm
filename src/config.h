@@ -144,6 +144,20 @@
 #define DUTY_KP                     0.05f       // Proportional gain
 #define DUTY_KI                     0.0f        // Integral gain (unused)
 #define DUTY_KD                     0.0f        // Derivative gain (unused)
+// PID Controller Structure with Anti-Windup
+typedef struct {
+    float Kp, Ki, Kd;          // Gains
+    float integral;              // Integral accumulator
+    float prev_error;            // Previous error for derivative
+    float output_min, output_max; // Anti-windup limits
+    float integral_min, integral_max; // Integral limits for anti-windup
+    bool initialized;          // First run flag
+} PID_Controller_t;
+
+// PID Functions
+void PID_Init(PID_Controller_t* pid, float Kp, float Ki, float Kd, float output_min, float output_max);
+float PID_Compute(PID_Controller_t* pid, float setpoint, float measurement, float dt);
+void PID_Reset(PID_Controller_t* pid);
 
 // Measurement smoothing
 #define MEASUREMENT_ALPHA           0.1f        // IIR filter coefficient
