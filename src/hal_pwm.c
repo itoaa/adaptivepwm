@@ -98,6 +98,8 @@ bool Adaptive_PWM_Init(Adaptive_PWM_t* pwm)
     pwm->frequency = PWM_FREQUENCY_HZ;
     pwm->current_duty = pwm->period / 2;
     pwm->is_running = false;
+    pwm->last_duty_set = 0.5f;  // Start at 50%
+    pwm->hysteresis_threshold = PWM_DUTY_HYSTERESIS;
     
     DEBUG_PRINT("PWM: Initialized at %lu Hz", pwm->frequency);
     
@@ -142,6 +144,7 @@ bool Adaptive_PWM_Stop(Adaptive_PWM_t* pwm)
     
     pwm->is_running = false;
     pwm->current_duty = 0;
+    pwm->last_duty_set = 0.0f;
     
     DEBUG_PRINT("PWM: Stopped");
     
@@ -173,12 +176,24 @@ bool Adaptive_PWM_SetDuty(Adaptive_PWM_t* pwm, float duty)
     if (duty < PWM_SOFT_MIN_DUTY) duty = PWM_SOFT_MIN_DUTY;
     if (duty > PWM_SOFT_MAX_DUTY) duty = PWM_SOFT_MAX_DUTY;
     
+    // Hysteresis check: Skip update if change is within threshold
+    // This prevents flutter/oscillation at boundary values
+    float duty_delta = duty - pwm->last_duty_set;
+    if (duty_delta < 0) duty_delta = -duty_delta;  // Absolute value
+    
+    if (duty_delta < pwm->hysteresis_threshold) {
+        // Change too small - skip to prevent flutter
+        return true;  // Still return success, just didn't change
+    }
+    
     uint32_t pulse = (uint32_t)(duty * pwm->period);
     
     __HAL_TIM_SET_COMPARE(&pwm->htim, TIM_CHANNEL_1, pulse);
     pwm->current_duty = (uint16_t)pulse;
+    pwm->last_duty_set = duty;  // Track last set value for hysteresis
     
-    DEBUG_PRINT_EVERY_N(100, "PWM: Duty set to %.2f%%", duty * 100);
+    DEBUG_PRINT_EVERY_N(100, "PWM: Duty set to %.2f%% (delta: %.3f%%)", 
+                        duty * 100, duty_delta * 100);
     
     return true;
 }
@@ -210,6 +225,7 @@ void Adaptive_PWM_EmergencyStop(Adaptive_PWM_t* pwm)
     
     pwm->is_running = false;
     pwm->current_duty = 0;
+    pwm->last_duty_set = 0.0f;
     
     DEBUG_PRINT("PWM: EMERGENCY STOP!");
 }

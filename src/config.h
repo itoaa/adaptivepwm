@@ -63,6 +63,8 @@
 #define PWM_HARD_MAX_DUTY           0.98f       // Absolute maximum (safety)
 #define PWM_SOFT_MIN_DUTY           0.05f       // Normal minimum
 #define PWM_SOFT_MAX_DUTY           0.95f       // Normal maximum
+// Duty cycle hysteresis to prevent flutter
+#define PWM_DUTY_HYSTERESIS         0.005f      // 0.5% hysteresis (prevents oscillation)
 
 // PWM Timer: TIM1 on APB2 (84 MHz)
 // ARR = 84MHz / 20kHz - 1 = 4199
