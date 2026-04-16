@@ -1,6 +1,14 @@
 /**
  * @file hal_pwm.c
- * @brief PWM Hardware Abstraction Layer implementation
+ * @brief PWM Hardware Abstraction Layer implementation with ramping support
+ * 
+ * Enhanced with:
+ * - Setpoint ramping for smooth duty cycle transitions
+ * - Feedforward control for buck/boost converters
+ * - Better error reporting
+ * 
+ * @version 2.2.1
+ * @date 2026-04-10
  */
 
 #include "hal_pwm.h"
@@ -9,10 +17,10 @@
 #include "adaptive_assert.h"
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 // External error manager
 extern ErrorManager_t error_manager;
-
 
 // Convert nanoseconds to timer ticks (at 84MHz)
 #define NS_TO_TICKS(ns) ((uint32_t)((ns) * 84 / 1000))
@@ -100,6 +108,10 @@ bool Adaptive_PWM_Init(Adaptive_PWM_t* pwm)
     pwm->is_running = false;
     pwm->last_duty_set = 0.5f;  // Start at 50%
     pwm->hysteresis_threshold = PWM_DUTY_HYSTERESIS;
+    pwm->ramp_rate = PWM_RAMP_RATE_PER_SEC;
+    pwm->target_duty = 0.5f;
+    pwm->feedforward_enabled = false;
+    pwm->last_update_ms = 0;
     
     DEBUG_PRINT("PWM: Initialized at %lu Hz", pwm->frequency);
     
@@ -126,6 +138,7 @@ bool Adaptive_PWM_Start(Adaptive_PWM_t* pwm)
     }
     
     pwm->is_running = true;
+    pwm->last_update_ms = HAL_GetTick();
     DEBUG_PRINT("PWM: Started");
     
     return true;
@@ -145,6 +158,7 @@ bool Adaptive_PWM_Stop(Adaptive_PWM_t* pwm)
     pwm->is_running = false;
     pwm->current_duty = 0;
     pwm->last_duty_set = 0.0f;
+    pwm->target_duty = 0.0f;
     
     DEBUG_PRINT("PWM: Stopped");
     
@@ -176,11 +190,30 @@ bool Adaptive_PWM_SetDuty(Adaptive_PWM_t* pwm, float duty)
     if (duty < PWM_SOFT_MIN_DUTY) duty = PWM_SOFT_MIN_DUTY;
     if (duty > PWM_SOFT_MAX_DUTY) duty = PWM_SOFT_MAX_DUTY;
     
-    // Hysteresis check: Skip update if change is within threshold
-    // This prevents flutter/oscillation at boundary values
-    float duty_delta = duty - pwm->last_duty_set;
-    if (duty_delta < 0) duty_delta = -duty_delta;  // Absolute value
+    // Set target for ramping
+    pwm->target_duty = duty;
     
+#if PWM_RAMP_ENABLED
+    // Apply ramping - limit change per call based on elapsed time
+    uint32_t now_ms = HAL_GetTick();
+    float dt = (now_ms - pwm->last_update_ms) / 1000.0f;
+    if (dt <= 0.0f) dt = 0.001f;  // Minimum 1ms
+    if (dt > 1.0f) dt = 1.0f;     // Cap at 1 second
+    
+    float max_change = pwm->ramp_rate * dt;
+    float current = pwm->last_duty_set;
+    
+    if (duty > current + max_change) {
+        duty = current + max_change;
+    } else if (duty < current - max_change) {
+        duty = current - max_change;
+    }
+    
+    pwm->last_update_ms = now_ms;
+#endif
+    
+    // Hysteresis check: Skip update if change is within threshold
+    float duty_delta = fabsf(duty - pwm->last_duty_set);
     if (duty_delta < pwm->hysteresis_threshold) {
         // Change too small - skip to prevent flutter
         return true;  // Still return success, just didn't change
@@ -192,8 +225,35 @@ bool Adaptive_PWM_SetDuty(Adaptive_PWM_t* pwm, float duty)
     pwm->current_duty = (uint16_t)pulse;
     pwm->last_duty_set = duty;  // Track last set value for hysteresis
     
-    DEBUG_PRINT_EVERY_N(100, "PWM: Duty set to %.2f%% (delta: %.3f%%)", 
-                        duty * 100, duty_delta * 100);
+    DEBUG_PRINT_EVERY_N(100, "PWM: Duty set to %.2f%% (target: %.2f%%, delta: %.3f%%)", 
+                        duty * 100, pwm->target_duty * 100, duty_delta * 100);
+    
+    return true;
+}
+
+bool Adaptive_PWM_SetDutyImmediate(Adaptive_PWM_t* pwm, float duty)
+{
+    ADAPTIVE_ASSERT(pwm != NULL);
+    
+    if (pwm == NULL || !pwm->is_running) {
+        return false;
+    }
+    
+    // Apply limits
+    if (duty < PWM_HARD_MIN_DUTY) duty = PWM_HARD_MIN_DUTY;
+    if (duty > PWM_HARD_MAX_DUTY) duty = PWM_HARD_MAX_DUTY;
+    if (duty < PWM_SOFT_MIN_DUTY) duty = PWM_SOFT_MIN_DUTY;
+    if (duty > PWM_SOFT_MAX_DUTY) duty = PWM_SOFT_MAX_DUTY;
+    
+    // Skip hysteresis for immediate mode
+    uint32_t pulse = (uint32_t)(duty * pwm->period);
+    
+    __HAL_TIM_SET_COMPARE(&pwm->htim, TIM_CHANNEL_1, pulse);
+    pwm->current_duty = (uint16_t)pulse;
+    pwm->last_duty_set = duty;
+    pwm->target_duty = duty;
+    
+    DEBUG_PRINT("PWM: Immediate duty set to %.2f%%", duty * 100);
     
     return true;
 }
@@ -206,6 +266,22 @@ float Adaptive_PWM_GetDuty(const Adaptive_PWM_t* pwm)
         return 0.0f;
     }
     return (float)pwm->current_duty / pwm->period;
+}
+
+float Adaptive_PWM_GetTargetDuty(const Adaptive_PWM_t* pwm)
+{
+    ADAPTIVE_ASSERT(pwm != NULL);
+    
+    if (pwm == NULL) return 0.0f;
+    return pwm->target_duty;
+}
+
+bool Adaptive_PWM_IsRamping(const Adaptive_PWM_t* pwm)
+{
+    ADAPTIVE_ASSERT(pwm != NULL);
+    
+    if (pwm == NULL) return false;
+    return fabsf(pwm->target_duty - pwm->last_duty_set) > pwm->hysteresis_threshold;
 }
 
 void Adaptive_PWM_EmergencyStop(Adaptive_PWM_t* pwm)
@@ -226,6 +302,7 @@ void Adaptive_PWM_EmergencyStop(Adaptive_PWM_t* pwm)
     pwm->is_running = false;
     pwm->current_duty = 0;
     pwm->last_duty_set = 0.0f;
+    pwm->target_duty = 0.0f;
     
     DEBUG_PRINT("PWM: EMERGENCY STOP!");
 }
@@ -244,4 +321,37 @@ bool Adaptive_PWM_IsRunning(const Adaptive_PWM_t* pwm)
 {
     if (pwm == NULL) return false;
     return pwm->is_running;
+}
+
+void Adaptive_PWM_SetRampRate(Adaptive_PWM_t* pwm, float rate_per_sec)
+{
+    ADAPTIVE_ASSERT(pwm != NULL);
+    ADAPTIVE_ASSERT(rate_per_sec > 0.0f);
+    
+    if (pwm == NULL) return;
+    if (rate_per_sec <= 0.0f) rate_per_sec = 0.01f;
+    if (rate_per_sec > 1.0f) rate_per_sec = 1.0f;
+    
+    pwm->ramp_rate = rate_per_sec;
+}
+
+void Adaptive_PWM_EnableFeedforward(Adaptive_PWM_t* pwm, bool enable)
+{
+    ADAPTIVE_ASSERT(pwm != NULL);
+    
+    if (pwm == NULL) return;
+    pwm->feedforward_enabled = enable;
+}
+
+float Adaptive_PWM_CalculateFeedforward(float vin, float vout, bool is_buck)
+{
+    if (vin <= 0.0f) return 0.5f;
+    
+    if (is_buck) {
+        // Buck: D = Vout / Vin
+        return vout / vin;
+    } else {
+        // Boost: D = 1 - (Vin / Vout)
+        return 1.0f - (vin / vout);
+    }
 }

@@ -1,9 +1,18 @@
 /**
  * @file main.c
- * @brief AdaptivePWM main entry point - Optimized Clock Configuration
+ * @brief AdaptivePWM main entry point - Enhanced Safety System
  * 
- * Complete implementation with FreeRTOS, HAL layers, and safety systems.
- * Version 2.1.0 with optimized 16MHz HSE clock system.
+ * Complete implementation with FreeRTOS, HAL layers, safety systems,
+ * Enhanced Fault Recovery (PWM-ARCH-004), and UART CLI authentication.
+ * 
+ * Security Features (PWM-ARCH-004):
+ * - Automatic fault recovery
+ * - Graceful degradation
+ * - Fault history logging to Flash
+ * - Predictive maintenance
+ * - Multi-level watchdog strategy
+ * - CRC validation of critical data
+ * - Diagnostic mode
  * 
  * Clock Configuration (16MHz HSE):
  * ================================
@@ -21,8 +30,8 @@
  * ADC Clock: 42 MHz (PCLK2/2) - Maximum allowed
  * PWM Clock: 84 MHz (TIM1 on APB2) - Full resolution
  * 
- * @version 2.1.0
- * @date 2026-03-21
+ * @version 2.4.0
+ * @date 2026-04-15
  */
 
 #include "stm32f4xx_hal.h"
@@ -37,6 +46,9 @@
 #include "error_handler.h"
 #include "temperature_monitor.h"
 #include "cli_commands.h"
+#include "cli_auth.h"
+#include "fault_history.h"
+#include "enhanced_safety.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -48,6 +60,7 @@ Adaptive_UART_t uart_handle;
 TaskManager_t task_manager;
 ErrorManager_t error_manager;
 TempMonitor_t temp_monitor;
+EnhancedSafetyManager_t safety_manager;
 
 // Calculation state
 WaveformBuffer_t waveform_buffer;
@@ -60,6 +73,7 @@ volatile bool system_running = false;
 // Forward declarations
 static void SystemClock_Config(void);
 static bool Initialize_System(void);
+static void Process_Safety_System(void);
 
 /**
  * @brief Main entry point
@@ -83,11 +97,16 @@ int main(void)
     if (Adaptive_WDG_WasReset()) {
         Error_Report(&error_manager, ERR_WATCHDOG_TIMEOUT, SEVERITY_WARNING,
                      "Watchdog reset occurred", 0);
+        
+        // Also log to fault history
+        FaultHistory_Log(FAULT_TYPE_WATCHDOG_TIMEOUT, FAULT_SEVERITY_WARNING,
+                        ERR_WATCHDOG_TIMEOUT, 0);
     }
     
     system_running = true;
     
     DEBUG_PRINT("AdaptivePWM v%s started", ADAPTIVEPWM_VERSION_STRING);
+    DEBUG_PRINT("Enhanced Safety System v1.0");
     DEBUG_PRINT("Clock: SYSCLK=%lu MHz, HCLK=%lu MHz", 
                 HAL_RCC_GetSysClockFreq()/1000000,
                 HAL_RCC_GetHCLKFreq()/1000000);
@@ -107,7 +126,22 @@ int main(void)
  */
 static bool Initialize_System(void)
 {
+    // Initialize error handler (legacy)
     Error_Init(&error_manager);
+    
+    // Initialize Enhanced Safety System (PWM-ARCH-004)
+    if (!EnhancedSafety_Init(&safety_manager)) {
+        Error_Report(&error_manager, ERR_INVALID_PARAMS, SEVERITY_ERROR,
+                     "Enhanced safety init failed", 0);
+        return false;
+    }
+    
+    // Initialize Fault History
+    if (!FaultHistory_Init()) {
+        Error_Report(&error_manager, ERR_INVALID_PARAMS, SEVERITY_WARNING,
+                     "Fault history init failed", 0);
+        // Non-fatal - continue without fault history
+    }
     
     if (!TempMonitor_Init(&temp_monitor)) {
         Error_Report(&error_manager, ERR_INVALID_PARAMS, SEVERITY_ERROR,
@@ -137,19 +171,45 @@ static bool Initialize_System(void)
         Error_Report(&error_manager, ERR_CLI_AUTH_FAILURE, SEVERITY_WARNING,
                      "UART init failed", 0);
     } else {
+        // Initialize CLI and authentication
+        if (!CLI_Init()) {
+            Error_Report(&error_manager, ERR_CLI_AUTH_FAILURE, SEVERITY_WARNING,
+                         "CLI init failed", 0);
+        }
+        
         Adaptive_UART_SendString(&uart_handle, "\r\n");
         Adaptive_UART_SendString(&uart_handle, "AdaptivePWM v" ADAPTIVEPWM_VERSION_STRING "\r\n");
+        Adaptive_UART_SendString(&uart_handle, "Enhanced Safety System v1.0\r\n");
         Adaptive_UART_SendString(&uart_handle, "Clock: 16MHz HSE → 84MHz SYSCLK\r\n");
-        Adaptive_UART_SendString(&uart_handle, "System initialized\r\n> ");
+        
+        // Display authentication status
+#if CLI_AUTH_ENABLED
+        if (CLI_Auth_IsPasswordSet()) {
+            Adaptive_UART_SendString(&uart_handle, "\r\n");
+            Adaptive_UART_SendString(&uart_handle, "╔════════════════════════════════════╗\r\n");
+            Adaptive_UART_SendString(&uart_handle, "║     AUTHENTICATION REQUIRED        ║\r\n");
+            Adaptive_UART_SendString(&uart_handle, "╚════════════════════════════════════╝\r\n");
+            Adaptive_UART_SendString(&uart_handle, "\r\n");
+            Adaptive_UART_SendString(&uart_handle, "Please login with: login <password>\r\n");
+            Adaptive_UART_SendString(&uart_handle, "\r\n");
+        } else {
+            Adaptive_UART_SendString(&uart_handle, "\r\n");
+            Adaptive_UART_SendString(&uart_handle, "╔════════════════════════════════════╗\r\n");
+            Adaptive_UART_SendString(&uart_handle, "║   INITIAL SETUP REQUIRED           ║\r\n");
+            Adaptive_UART_SendString(&uart_handle, "╚════════════════════════════════════╝\r\n");
+            Adaptive_UART_SendString(&uart_handle, "\r\n");
+            Adaptive_UART_SendString(&uart_handle, "No password set. First login sets password.\r\n");
+            Adaptive_UART_SendString(&uart_handle, "Use: login <new_password>\r\n");
+            Adaptive_UART_SendString(&uart_handle, "\r\n");
+        }
+        Adaptive_UART_SendString(&uart_handle, "\r\n> ");
+#else
+        Adaptive_UART_SendString(&uart_handle, "System initialized (Auth: DISABLED)\r\n> ");
+#endif
     }
     
     if (!Tasks_Init(&task_manager)) {
         DEBUG_PRINT("Tasks_Init failed");
-        return false;
-    }
-    
-    if (!CLI_Init()) {
-        DEBUG_PRINT("CLI_Init failed");
         return false;
     }
     
@@ -160,7 +220,54 @@ static bool Initialize_System(void)
     }
     
     DEBUG_PRINT("System initialization complete");
+    
+    // Log successful startup to fault history
+    FaultHistory_Log(FAULT_TYPE_NONE, FAULT_SEVERITY_INFO,
+                    0, HAL_RCC_GetSysClockFreq());
+    
     return true;
+}
+
+/**
+ * @brief Process safety system (call periodically from main loop or task)
+ * 
+ * Handles:
+ * - Safety state processing
+ * - Watchdog monitoring
+ * - Recovery state machine
+ * - Diagnostic mode timeout
+ */
+static void Process_Safety_System(void)
+{
+    // Process enhanced safety system
+    SafetyState_t state = EnhancedSafety_Process(&safety_manager);
+    
+    // Check for emergency stop
+    if (state == SAFETY_STATE_EMERGENCY) {
+        // Emergency stop active - ensure PWM is stopped
+        if (pwm_handle.is_running) {
+            Adaptive_PWM_EmergencyStop(&pwm_handle);
+        }
+        return;
+    }
+    
+    // Check degradation level and adjust operation
+    DegradationLevel_t degradation = EnhancedSafety_GetDegradationLevel(&safety_manager);
+    
+    if (degradation >= DEGRADATION_SEVERE) {
+        // Significant degradation - reduce PWM duty if running
+        if (pwm_handle.is_running) {
+            float current_duty = Adaptive_PWM_GetDuty(&pwm_handle);
+            float max_duty = EnhancedSafety_GetEffectiveDutyLimit(&safety_manager, current_duty);
+            
+            if (current_duty > max_duty) {
+                Adaptive_PWM_SetDuty(&pwm_handle, max_duty);
+            }
+        }
+    }
+    
+    // Module watchdog checkins
+    EnhancedSafety_WatchdogCheckin(&safety_manager, WDG_MODULE_MAIN);
 }
 
 /**
@@ -232,6 +339,10 @@ void SysTick_Handler(void)
 
 void HardFault_Handler(void)
 {
+    // Log to fault history before critical error
+    FaultHistory_Log(FAULT_TYPE_SOFTWARE_FAULT, FAULT_SEVERITY_FATAL,
+                    ERR_FREERTOS_ASSERT, 0);
+    
     Error_Critical(&error_manager, ERR_FREERTOS_ASSERT, "Hard fault");
     while (1);
 }
@@ -254,7 +365,68 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
             char cmd[128];
             Adaptive_UART_GetCommand(&uart_handle, cmd, sizeof(cmd));
             CLI_ProcessCommand(&uart_handle, cmd);
+            
+            // Check authentication state for prompt
+#if CLI_AUTH_ENABLED
+            if (CLI_Auth_IsAuthenticated()) {
+                uint32_t remaining = CLI_Auth_GetSessionRemaining();
+                if (remaining > 0 && remaining < 60) {
+                    Adaptive_UART_Printf(&uart_handle, "[timeout: %lus] ", remaining);
+                }
+            }
+#endif
             Adaptive_UART_SendString(&uart_handle, "> ");
         }
     }
+}
+
+/**
+ * @brief Safety task callback (called from FreeRTOS)
+ * 
+ * This function should be called periodically (e.g., every 100ms)
+ * from a FreeRTOS task to process the safety system.
+ */
+void Safety_Task_Callback(void)
+{
+    Process_Safety_System();
+}
+
+/**
+ * @brief Fault handler integration
+ * 
+ * Called by error handler to log faults to enhanced system.
+ */
+void Enhanced_Fault_Handler(uint16_t error_code, uint32_t context)
+{
+    FaultType_t fault_type = FaultHistory_MapErrorCode(error_code);
+    FaultSeverity_t severity = FAULT_SEVERITY_ERROR;
+    
+    // Map severity from error handler
+    switch (error_code) {
+        case ERR_OVER_VOLTAGE:
+        case ERR_UNDER_VOLTAGE:
+        case ERR_OVER_CURRENT:
+        case ERR_OVER_TEMP:
+            severity = FAULT_SEVERITY_WARNING;
+            break;
+        case ERR_PWM_FAULT:
+        case ERR_ADC_FAILURE:
+        case ERR_WATCHDOG_TIMEOUT:
+            severity = FAULT_SEVERITY_ERROR;
+            break;
+        case ERR_INVALID_PARAMS:
+        case ERR_FREERTOS_ASSERT:
+        case ERR_CLI_AUTH_FAILURE:
+            severity = FAULT_SEVERITY_INFO;
+            break;
+        default:
+            severity = FAULT_SEVERITY_ERROR;
+            break;
+    }
+    
+    // Log to fault history
+    FaultHistory_Log(fault_type, severity, error_code, context);
+    
+    // Report to enhanced safety system
+    EnhancedSafety_ReportFault(&safety_manager, fault_type, severity, error_code, context);
 }

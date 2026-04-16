@@ -7,11 +7,13 @@
  * 
  * Features:
  * - Duty cycle hysteresis to prevent flutter
+ * - Setpoint ramping for smooth transitions
  * - Emergency stop with hardware break input
  * - Hardware and software duty limits
+ * - Feedforward control for converter topologies
  * 
- * @version 2.2.0
- * @date 2026-04-09
+ * @version 2.2.1
+ * @date 2026-04-10
  */
 
 #ifndef HAL_PWM_H
@@ -30,7 +32,7 @@
 #define PWM_GPIO_AF         GPIO_AF1_TIM1
 
 /**
- * @brief PWM handle structure with hysteresis support
+ * @brief PWM handle structure with hysteresis and ramping support
  */
 typedef struct {
     TIM_HandleTypeDef htim;
@@ -38,8 +40,12 @@ typedef struct {
     uint16_t period;
     volatile uint16_t current_duty;   ///< Current duty cycle in timer ticks
     float last_duty_set;                ///< Last duty cycle set (0.0-1.0), for hysteresis
+    float target_duty;                    ///< Target duty for ramping
     float hysteresis_threshold;         ///< Minimum change before update (prevents flutter)
+    float ramp_rate;                      ///< Max duty change per second
+    uint32_t last_update_ms;              ///< Timestamp for ramp calculation
     volatile bool is_running;
+    bool feedforward_enabled;             ///< Enable feedforward control
 } Adaptive_PWM_t;
 
 // NOTE: Using Adaptive_ prefix to avoid conflicts with STM32 HAL functions
@@ -66,10 +72,10 @@ bool Adaptive_PWM_Start(Adaptive_PWM_t* pwm);
 bool Adaptive_PWM_Stop(Adaptive_PWM_t* pwm);
 
 /**
- * @brief Set duty cycle with hysteresis
+ * @brief Set duty cycle with hysteresis and optional ramping
  * 
  * Only updates if change is greater than hysteresis_threshold.
- * This prevents duty cycle flutter at boundary values.
+ * If PWM_RAMP_ENABLED, limits rate of change to ramp_rate.
  * 
  * @param pwm Pointer to running PWM handle
  * @param duty Duty cycle (0.0 - 1.0)
@@ -78,11 +84,37 @@ bool Adaptive_PWM_Stop(Adaptive_PWM_t* pwm);
 bool Adaptive_PWM_SetDuty(Adaptive_PWM_t* pwm, float duty);
 
 /**
+ * @brief Set duty cycle immediately (no ramping)
+ * 
+ * Sets duty immediately without ramping, but still applies limits.
+ * Use for emergency responses or initialization.
+ * 
+ * @param pwm Pointer to running PWM handle
+ * @param duty Duty cycle (0.0 - 1.0)
+ * @return true on success, false on failure
+ */
+bool Adaptive_PWM_SetDutyImmediate(Adaptive_PWM_t* pwm, float duty);
+
+/**
  * @brief Get current duty cycle
  * @param pwm Pointer to PWM handle
  * @return Current duty cycle (0.0 - 1.0)
  */
 float Adaptive_PWM_GetDuty(const Adaptive_PWM_t* pwm);
+
+/**
+ * @brief Get target duty cycle (with ramping)
+ * @param pwm Pointer to PWM handle
+ * @return Target duty cycle (0.0 - 1.0)
+ */
+float Adaptive_PWM_GetTargetDuty(const Adaptive_PWM_t* pwm);
+
+/**
+ * @brief Check if duty cycle is currently ramping
+ * @param pwm Pointer to PWM handle
+ * @return true if ramping to target, false otherwise
+ */
+bool Adaptive_PWM_IsRamping(const Adaptive_PWM_t* pwm);
 
 /**
  * @brief Emergency stop via hardware break input
@@ -107,5 +139,34 @@ uint32_t Adaptive_PWM_GetFrequency(const Adaptive_PWM_t* pwm);
  * @return true if running, false otherwise
  */
 bool Adaptive_PWM_IsRunning(const Adaptive_PWM_t* pwm);
+
+/**
+ * @brief Set ramp rate for duty cycle changes
+ * 
+ * @param pwm Pointer to PWM handle
+ * @param rate_per_sec Maximum duty change per second (0.01 - 1.0)
+ */
+void Adaptive_PWM_SetRampRate(Adaptive_PWM_t* pwm, float rate_per_sec);
+
+/**
+ * @brief Enable/disable feedforward control
+ * 
+ * @param pwm Pointer to PWM handle
+ * @param enable true to enable feedforward
+ */
+void Adaptive_PWM_EnableFeedforward(Adaptive_PWM_t* pwm, bool enable);
+
+/**
+ * @brief Calculate feedforward duty cycle for converter topologies
+ * 
+ * For buck converter: D = Vout / Vin
+ * For boost converter: D = 1 - (Vin / Vout)
+ * 
+ * @param vin Input voltage
+ * @param vout Output voltage
+ * @param is_buck true for buck, false for boost
+ * @return Calculated feedforward duty cycle (0.0 - 1.0)
+ */
+float Adaptive_PWM_CalculateFeedforward(float vin, float vout, bool is_buck);
 
 #endif // HAL_PWM_H

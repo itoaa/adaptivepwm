@@ -41,7 +41,7 @@ void TempMonitor_Update(TempMonitor_t* monitor, float temp_c)
     }
     
     // Simple moving average (exponential)
-    monitor->avg_temp += MEASUREMENT_ALPHA * (temp_c - monitor->avg_temp);
+    monitor->avg_temp += ADC_FILTER_IIR_ALPHA * (temp_c - monitor->avg_temp);
     
     // State machine with hysteresis
     switch (monitor->state) {

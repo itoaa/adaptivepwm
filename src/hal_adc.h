@@ -1,9 +1,17 @@
 /**
  * @file hal_adc.h
- * @brief Hardware Abstraction Layer for ADC with DMA
+ * @brief Hardware Abstraction Layer for ADC with DMA and enhanced filtering
  * 
  * Implements continuous ADC sampling using DMA for zero-CPU overhead.
  * Supports multiple channels: voltage, current, temperature.
+ * 
+ * Enhancements:
+ * - Dual filtering: IIR + Moving average
+ * - Adaptive sampling rate during transients
+ * - Better noise rejection
+ * 
+ * @version 2.2.1
+ * @date 2026-04-10
  */
 
 #ifndef HAL_ADC_H
@@ -51,18 +59,87 @@ typedef struct {
     ADC_Measurement_t averaged;
     volatile bool conversion_complete;
     uint32_t sample_count;
+    bool in_transient;     // Flag for transient detection
 } Adaptive_ADC_t;
 
 // NOTE: Using Adaptive_ prefix to avoid conflicts with STM32 HAL functions
 
+/**
+ * @brief Initialize ADC hardware
+ * @param adc Pointer to ADC handle structure
+ * @return true on success, false on failure
+ */
 bool Adaptive_ADC_Init(Adaptive_ADC_t* adc);
+
+/**
+ * @brief Start ADC conversions in DMA mode
+ * @param adc Pointer to initialized ADC handle
+ * @return true on success, false on failure
+ */
 bool Adaptive_ADC_Start_DMA(Adaptive_ADC_t* adc);
+
+/**
+ * @brief Stop ADC DMA conversions
+ * @param adc Pointer to running ADC handle
+ * @return true on success, false on failure
+ */
 bool Adaptive_ADC_Stop_DMA(Adaptive_ADC_t* adc);
-bool Adaptive_ADC_GetMeasurement(Adaptive_ADC_t* adc, ADC_Measurement_t* meas);
-bool Adaptive_ADC_GetAveraged(Adaptive_ADC_t* adc, ADC_Measurement_t* meas);
+
+/**
+ * @brief Process DMA buffer and update measurements
+ * 
+ * Should be called from DMA complete callback or task.
+ * Applies filtering and updates current/averaged values.
+ * 
+ * @param adc Pointer to ADC handle
+ */
 void Adaptive_ADC_ProcessBuffer(Adaptive_ADC_t* adc);
+
+/**
+ * @brief Get latest ADC measurement (filtered)
+ * @param adc Pointer to ADC handle
+ * @param meas Pointer to measurement structure to fill
+ * @return true if data available and valid, false otherwise
+ */
+bool Adaptive_ADC_GetMeasurement(Adaptive_ADC_t* adc, ADC_Measurement_t* meas);
+
+/**
+ * @brief Get averaged ADC measurement (IIR filtered)
+ * @param adc Pointer to ADC handle
+ * @param meas Pointer to measurement structure to fill
+ * @return true if data available and valid, false otherwise
+ */
+bool Adaptive_ADC_GetAveraged(Adaptive_ADC_t* adc, ADC_Measurement_t* meas);
+
+/**
+ * @brief Check if new conversion data is ready
+ * @param adc Pointer to ADC handle
+ * @return true if new data available, false otherwise
+ */
 bool Adaptive_ADC_IsReady(Adaptive_ADC_t* adc);
+
+/**
+ * @brief Calibrate ADC using known references
+ * @param adc Pointer to ADC handle
+ * @param known_vin Known input voltage
+ * @param known_vout Known output voltage
+ * @param known_current Known current
+ * @return true if successful, false otherwise
+ */
 bool Adaptive_ADC_Calibrate(Adaptive_ADC_t* adc, float known_vin, float known_vout, float known_current);
+
+/**
+ * @brief Get raw ADC value for a channel
+ * @param adc Pointer to ADC handle
+ * @param channel Channel number (0-3)
+ * @return Raw ADC value (0-4095)
+ */
 uint16_t Adaptive_ADC_GetRaw(const Adaptive_ADC_t* adc, uint8_t channel);
+
+/**
+ * @brief Check and clear DMA complete flag
+ * @return true if DMA completed, false otherwise
+ */
+bool Adaptive_ADC_CheckDMAComplete(void);
 
 #endif // HAL_ADC_H

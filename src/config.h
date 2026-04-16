@@ -10,8 +10,8 @@
  *   PCLK1  = 42 MHz (APB1 - ADC, UART, TIM2-5)
  *   PCLK2  = 84 MHz (APB2 - TIM1, ADC)
  * 
- * @version 2.1.0
- * @date 2026-03-21
+ * @version 2.3.1
+ * @date 2026-04-15
  */
 
 #ifndef CONFIG_H
@@ -24,9 +24,9 @@
 // VERSION
 // =============================================================================
 #define ADAPTIVEPWM_VERSION_MAJOR   2
-#define ADAPTIVEPWM_VERSION_MINOR   1
-#define ADAPTIVEPWM_VERSION_PATCH   0
-#define ADAPTIVEPWM_VERSION_STRING  "2.1.0"
+#define ADAPTIVEPWM_VERSION_MINOR   3
+#define ADAPTIVEPWM_VERSION_PATCH   1
+#define ADAPTIVEPWM_VERSION_STRING  "2.3.1"
 
 // =============================================================================
 // CLOCK CONFIGURATION
@@ -52,6 +52,41 @@
 #define PLLQ_VALUE                  7   // USB = 48 MHz
 
 // =============================================================================
+// RNG CONFIGURATION (SEC-033 - Hardware RNG)
+// =============================================================================
+
+// Enable Hardware RNG peripheral (STM32F401)
+// Uses dedicated entropy source from analog noise
+#ifndef RNG_ENABLED
+    #define RNG_ENABLED             1
+#endif
+
+// RNG clock: AHB2 bus clock (HCLK)
+#define RNG_CLOCK_ENABLE()          __HAL_RCC_RNG_CLK_ENABLE()
+#define RNG_CLOCK_DISABLE()         __HAL_RCC_RNG_CLK_DISABLE()
+
+// RNG error handling
+#ifndef RNG_ERROR_RECOVERY
+    #define RNG_ERROR_RECOVERY      1   // Auto-recover from clock errors
+#endif
+
+// RNG fallback: Use software PRNG if hardware RNG fails
+// Note: Only enable for testing on platforms without hardware RNG
+#ifndef RNG_FALLBACK_SOFTWARE
+    #define RNG_FALLBACK_SOFTWARE   0   // Disabled by default (security requirement)
+#endif
+
+// RNG timeout for polling mode (milliseconds)
+#ifndef RNG_TIMEOUT_MS
+    #define RNG_TIMEOUT_MS          100
+#endif
+
+// Maximum RNG generation attempts before error
+#ifndef RNG_MAX_ATTEMPTS
+    #define RNG_MAX_ATTEMPTS        3
+#endif
+
+// =============================================================================
 // PWM CONFIGURATION
 // =============================================================================
 
@@ -63,8 +98,13 @@
 #define PWM_HARD_MAX_DUTY           0.98f       // Absolute maximum (safety)
 #define PWM_SOFT_MIN_DUTY           0.05f       // Normal minimum
 #define PWM_SOFT_MAX_DUTY           0.95f       // Normal maximum
+
 // Duty cycle hysteresis to prevent flutter
-#define PWM_DUTY_HYSTERESIS         0.005f      // 0.5% hysteresis (prevents oscillation)
+#define PWM_DUTY_HYSTERESIS         0.005f      // 0.5% hysteresis
+
+// Setpoint ramping for smooth transitions
+#define PWM_RAMP_ENABLED            1
+#define PWM_RAMP_RATE_PER_SEC       0.10f       // 10% per second max change
 
 // PWM Timer: TIM1 on APB2 (84 MHz)
 // ARR = 84MHz / 20kHz - 1 = 4199
@@ -87,10 +127,19 @@
 #define ADC_VREF_MV                 3300.0f     // 3.3V reference
 #define ADC_RESOLUTION              4096.0f     // 12-bit (0-4095)
 
+// ADC filtering options
+#define ADC_FILTER_IIR_ENABLED      1
+#define ADC_FILTER_IIR_ALPHA        0.1f        // IIR filter coefficient
+#define ADC_FILTER_MOVING_AVG_ENABLED 1
+#define ADC_FILTER_MOVING_AVG_SIZE  8           // 8-sample moving average
+
+// Adaptive sampling - increase rate during transients
+#define ADC_ADAPTIVE_SAMPLING_ENABLED 1
+#define ADC_TRANSIENT_THRESHOLD     0.05f       // 5% change triggers fast sampling
+#define ADC_FAST_SAMPLE_RATE_HZ     20000       // Double rate during transients
+#define ADC_FAST_SAMPLE_DURATION_MS 100         // Duration of fast sampling
+
 // Sampling times (in cycles) - optimized for 42 MHz ADC clock
-// 3 cycles  = 71 ns   (fastest, for low impedance)
-// 15 cycles = 357 ns  (medium, for current sense)
-// 28 cycles = 667 ns  (slower, for temperature)
 #define ADC_SAMPLETIME_FAST         3
 #define ADC_SAMPLETIME_MEDIUM       15
 #define ADC_SAMPLETIME_SLOW         28
@@ -112,6 +161,51 @@
 // Baud rate error at 115200: ~0.16% (acceptable)
 
 // =============================================================================
+// CLI AUTHENTICATION CONFIGURATION (SEC-019)
+// =============================================================================
+
+// Enable UART CLI authentication
+#ifndef CLI_AUTH_ENABLED
+    #define CLI_AUTH_ENABLED          1
+#endif
+
+// Maximum failed attempts before lockout
+#ifndef CLI_AUTH_MAX_ATTEMPTS
+    #define CLI_AUTH_MAX_ATTEMPTS     3
+#endif
+
+// Lockout duration in seconds (5 minutes)
+#ifndef CLI_AUTH_LOCKOUT_DURATION_S
+    #define CLI_AUTH_LOCKOUT_DURATION_S  300
+#endif
+
+// Password length constraints
+#ifndef CLI_AUTH_PASSWORD_MIN_LEN
+    #define CLI_AUTH_PASSWORD_MIN_LEN    4
+#endif
+
+#ifndef CLI_AUTH_PASSWORD_MAX_LEN
+    #define CLI_AUTH_PASSWORD_MAX_LEN    32
+#endif
+
+// PBKDF2 iteration count (100000 = NIST SP 800-132 compliant, SEC-027)
+// Previous value: 1000 (minimum recommended)
+// Updated: 2026-04-13 - Increased per security assessment ADP-ARCH-001
+#ifndef CLI_AUTH_HASH_ITERATIONS
+    #define CLI_AUTH_HASH_ITERATIONS     100000
+#endif
+
+// Compile-time check for minimum PBKDF2 iterations (security requirement)
+#if CLI_AUTH_HASH_ITERATIONS < 100000
+    #warning "CLI_AUTH_HASH_ITERATIONS below NIST SP 800-132 recommended minimum of 100,000"
+#endif
+
+// Session timeout (seconds, 0 = no timeout)
+#ifndef CLI_AUTH_SESSION_TIMEOUT_S
+    #define CLI_AUTH_SESSION_TIMEOUT_S   300  // 5 minutes
+#endif
+
+// =============================================================================
 // SAFETY LIMITS
 // =============================================================================
 
@@ -129,7 +223,7 @@
 // Temperature limits
 #define TEMP_WARNING_C              75.0f
 #define TEMP_CRITICAL_C             85.0f
-#define TEMP_SHUTDOWN_C               95.0f
+#define TEMP_SHUTDOWN_C             95.0f
 #define TEMP_HYSTERESIS_C           2.0f        // Prevent oscillation
 
 // =============================================================================
@@ -142,15 +236,30 @@
 
 // Control loop gains
 #define DUTY_KP                     0.05f       // Proportional gain
-#define DUTY_KI                     0.0f        // Integral gain (unused)
-#define DUTY_KD                     0.0f        // Derivative gain (unused)
+#define DUTY_KI                     0.01f       // Integral gain (was 0.0)
+#define DUTY_KD                     0.001f      // Derivative gain (was 0.0)
+
+// Setpoint weighting - reduces overshoot while maintaining speed
+#define PID_SETPOINT_WEIGHT         0.7f        // 0-1, lower = less overshoot
+
+// Derivative filter - smooths derivative term
+#define PID_DERIVATIVE_FILTER       0.1f        // 0-1, higher = more filtering
+
+// Feedforward for buck/boost converters
+// D_estimated = Vout / Vin for buck, 1 - Vout/Vin for boost
+#define FEEDFORWARD_ENABLED         1
+#define FEEDFORWARD_GAIN            0.5f        // Blend factor (0-1)
+
 // PID Controller Structure with Anti-Windup
 typedef struct {
     float Kp, Ki, Kd;          // Gains
+    float setpoint_weight;       // Setpoint weighting (0-1)
+    float derivative_filter;       // Low-pass filter for derivative (0-1)
     float integral;              // Integral accumulator
+    float integral_min, integral_max; // Anti-windup limits
     float prev_error;            // Previous error for derivative
-    float output_min, output_max; // Anti-windup limits
-    float integral_min, integral_max; // Integral limits for anti-windup
+    float prev_measurement;      // Previous measurement (derivative on measurement)
+    float output_min, output_max; // Output limits
     bool initialized;          // First run flag
 } PID_Controller_t;
 
@@ -158,9 +267,11 @@ typedef struct {
 void PID_Init(PID_Controller_t* pid, float Kp, float Ki, float Kd, float output_min, float output_max);
 float PID_Compute(PID_Controller_t* pid, float setpoint, float measurement, float dt);
 void PID_Reset(PID_Controller_t* pid);
-
-// Measurement smoothing
-#define MEASUREMENT_ALPHA           0.1f        // IIR filter coefficient
+void PID_SetGains(PID_Controller_t* pid, float Kp, float Ki, float Kd);
+void PID_SetSetpointWeight(PID_Controller_t* pid, float weight);
+void PID_SetDerivativeFilter(PID_Controller_t* pid, float alpha);
+float PID_GetIntegral(const PID_Controller_t* pid);
+void PID_SetIntegral(PID_Controller_t* pid, float integral);
 
 // =============================================================================
 // FLASH LOGGER CONFIGURATION
@@ -175,6 +286,34 @@ void PID_Reset(PID_Controller_t* pid);
 // Wear leveling: spread writes across sector
 #define FLASH_WEAR_LEVELING_ENABLED 1
 #define FLASH_LOG_ENTRIES_PER_SECTOR (FLASH_LOG_SIZE / FLASH_LOG_ENTRY_SIZE)
+
+// =============================================================================
+// FLASH LOGGER HMAC-SHA256 INTEGRITY PROTECTION (SEC-023)
+// =============================================================================
+
+// Enable HMAC-SHA256 integrity protection
+#define FLASH_LOGGER_HMAC_ENABLED   1
+
+// HMAC configuration
+#define HMAC_SHA256_KEY_SIZE        32      // 256-bit key
+#define HMAC_SHA256_SIGNATURE_SIZE  32      // 256-bit signature
+#define HMAC_SALT_SIZE              16      // 128-bit salt per entry
+
+// Key storage location - Sector 6 (128KB, just before log sector)
+// In production, use secure storage (HSM, secure element, option bytes)
+#define HMAC_KEY_FLASH_ADDR         0x080D0000
+#define HMAC_KEY_SECTOR             FLASH_SECTOR_6
+
+// HMAC magic values
+#define FLASH_LOG_HMAC_MAGIC        0x484D4143  // "HMAC"
+#define FLASH_LOG_CHAIN_MAGIC       0x43484131  // "CHA1" (Chain v1)
+
+// HMAC log entry size (80 bytes vs 32 bytes for legacy)
+#define FLASH_HMAC_ENTRY_SIZE       80
+#define FLASH_HMAC_HEADER_SIZE      64
+
+// Maximum entries with HMAC (fewer due to larger entry size)
+#define FLASH_HMAC_MAX_ENTRIES      ((FLASH_LOG_SIZE - FLASH_HMAC_HEADER_SIZE) / FLASH_HMAC_ENTRY_SIZE)
 
 // =============================================================================
 // WATCHDOG CONFIGURATION
@@ -194,5 +333,41 @@ void PID_Reset(PID_Controller_t* pid);
     #define ASSERT_ENABLED          0
     #define DEBUG_PRINT_ENABLED     0
 #endif
+
+// =============================================================================
+// SECURITY FEATURE FLAGS (Added in v2.3.0)
+// =============================================================================
+
+// Feature availability flags
+#define FEATURE_FLASH_HMAC          1   // HMAC-SHA256 for flash logger (SEC-023)
+#define FEATURE_UART_AUTH           CLI_AUTH_ENABLED  // UART CLI authentication (SEC-019)
+#define FEATURE_WATCHDOG_TASK       0   // Task-level watchdog (ADP-002)
+#define FEATURE_HARDWARE_RNG        RNG_ENABLED       // Hardware RNG (SEC-033)
+
+// Security policy
+#define SECURITY_TAMPER_RESPONSE    0   // 0=Log only, 1=Halt on tamper
+#define SECURITY_KEY_ROTATION_DAYS  365 // Key rotation period
+
+// =============================================================================
+// FLASH MEMORY MAP
+// =============================================================================
+
+/*
+ * STM32F401RE Flash Layout (512 KB):
+ * 
+ * Sector 0: 0x08000000 - 0x08003FFF (16 KB)  - Bootloader/Application
+ * Sector 1: 0x08004000 - 0x08007FFF (16 KB)  - Application
+ * Sector 2: 0x08008000 - 0x0800BFFF (16 KB)  - Application
+ * Sector 3: 0x0800C000 - 0x0800FFFF (16 KB)  - Application
+ * Sector 4: 0x08010000 - 0x0801FFFF (64 KB)  - Application
+ * Sector 5: 0x08020000 - 0x0803FFFF (128 KB) - Application / Auth Credentials (0x080C0000)
+ * Sector 6: 0x08040000 - 0x0805FFFF (128 KB)  - HMAC Key Storage (0x080D0000)
+ * Sector 7: 0x08060000 - 0x0807FFFF (128 KB) - Flash Logger (0x080E0000)
+ * 
+ * Note: Actual addresses adjusted to use upper sectors for data
+ * Sector 5: Auth Credentials @ 0x080C0000 (alias)
+ * Sector 6: HMAC Key @ 0x080D0000 (alias)
+ * Sector 7: Flash Log @ 0x080E0000 (alias)
+ */
 
 #endif // CONFIG_H
