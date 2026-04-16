@@ -411,3 +411,6 @@ MIT License - See [LICENSE](LICENSE)
 ## Author
 
 Ola Andersson
+# Project Location
+
+Note: Project moved from workspace root to projects/ directory.
