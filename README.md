@@ -4,13 +4,22 @@
 
 AdaptivePWM is a real-time control system for buck/boost converters and electronic speed controllers (ESCs). It continuously monitors electrical parameters and dynamically adjusts PWM output for optimal efficiency.
 
-**Version:** 2.2.1  
+**Version:** 2.3.1  
 **Target:** STM32F401RE @ 84 MHz  
-**Clock:** 16 MHz HSE → 84 MHz SYSCLK
+**Clock:** 16 MHz HSE → 84 MHz SYSCLK  
+**Framework:** CISSP-Aligned Security Framework
 
 ---
 
-## What's New in v2.2.1
+## What's New in v2.3.1
+
+### Security Framework (CISSP/NIST Aligned)
+- **SEC-031:** Physical button confirmation for first-time password setup
+- **SEC-049:** Secure bootloader with Ed25519 signature verification
+- **SEC-043:** Formal risk assessment with CVSS 3.1 scoring
+- **CLI Authentication:** Password-based login with session management
+- **Flash Logger HMAC:** Integrity protection for log entries (pending)
+- **Secure Boot:** Anti-rollback, RDP Level 2, recovery mode
 
 ### Enhanced Control Systems
 - **Full PID Control:** Now with integral (Ki=0.01) and derivative (Kd=0.001) terms
@@ -64,8 +73,8 @@ See [docs/design.md](docs/design.md) for complete clock documentation.
    - Frequency: 20kHz @ 84 MHz clock
    - Duty cycle: 5% - 95% with hardware limits
    - Emergency stop via break input
-   - **NEW: Setpoint ramping** (configurable rate)
-   - **NEW: Feedforward control** for converters
+   - **Setpoint ramping** (configurable rate)
+   - **Feedforward control** for converters
 
 2. **ADC Hardware Abstraction** (`hal_adc.h/c`)
    - 4-channel DMA-based sampling
@@ -73,8 +82,8 @@ See [docs/design.md](docs/design.md) for complete clock documentation.
    - Channels: Vin, Vout, Current, Temperature
    - Optimized sampling times per channel
    - Sample rate: 10kHz total
-   - **NEW: Dual-stage filtering** (moving avg + IIR)
-   - **NEW: Transient detection**
+   - **Dual-stage filtering** (moving avg + IIR)
+   - **Transient detection**
 
 3. **Parameter Calculation** (`param_calc.h/c`)
    - Real-time L, C, ESR calculation
@@ -86,10 +95,10 @@ See [docs/design.md](docs/design.md) for complete clock documentation.
 
 4. **PID Controller** (`pid_controller.c`)
    - Full PID with anti-windup
-   - **NEW: Setpoint weighting** (0-1)
-   - **NEW: Derivative on measurement**
-   - **NEW: Derivative filtering** (low-pass)
-   - **NEW: Back-calculation anti-windup**
+   - **Setpoint weighting** (0-1)
+   - **Derivative on measurement**
+   - **Derivative filtering** (low-pass)
+   - **Back-calculation anti-windup**
    - Runtime gain adjustment
 
 5. **FreeRTOS Tasks** (`freertos_tasks.h/c`)
@@ -98,14 +107,18 @@ See [docs/design.md](docs/design.md) for complete clock documentation.
    - Safety task: 100Hz (highest priority)
    - CLI task: 50Hz
 
-6. **Safety Systems**
+6. **Safety Systems** (`enhanced_safety.h/c`)
    - Independent watchdog (IWDG)
    - Temperature monitoring with derating
    - Overcurrent detection
    - Emergency PWM shutdown
+   - **Fault recovery state machine**
+   - **Multi-level safety states**
 
-7. **CLI Interface** (`cli_commands.h/c`)
+7. **CLI Interface** (`cli_commands.h/c`, `cli_auth.h/c`)
    - Commands: status, config, monitor, pwm, calibrate, errors, help
+   - **Password authentication with session management**
+   - **First-time setup with physical confirmation**
    - UART: 115200 baud
    - Interrupt-driven RX
 
@@ -114,10 +127,11 @@ See [docs/design.md](docs/design.md) for complete clock documentation.
    - Circular log buffer (16 entries)
    - Automatic shutdown on critical errors
 
-9. **Flash Logger** (`flash_logger.h/c`)
+9. **Flash Logger** (`flash_logger.h/c`, `flash_logger_hmac.h/c`)
    - Persistent data logging
    - Circular buffer in flash sector 11
    - CRC validation
+   - **HMAC-SHA256 integrity protection** (pending)
 
 10. **Temperature Monitor** (`temperature_monitor.h/c`)
     - Thermal derating curve
@@ -129,6 +143,35 @@ See [docs/design.md](docs/design.md) for complete clock documentation.
     - Automatic gain/offset calibration
     - Flash storage
 
+12. **Secure Bootloader** (`bootloader/`)
+    - Ed25519 signature verification
+    - SHA-256 hash validation
+    - Anti-rollback protection
+    - RDP Level 2 support
+    - Recovery mode
+
+---
+
+## Security Framework
+
+### Implemented Security Controls
+
+| Control | Implementation | Framework Alignment |
+|---------|---------------|---------------------|
+| **Authentication** | PBKDF2-HMAC-SHA256 (100,000 iterations) | NIST SP 800-132 |
+| **Physical Confirmation** | GPIO button/jumper (SEC-031) | IEC 62443 |
+| **Boot Integrity** | Ed25519 + SHA-256 (SEC-049) | NIST CSF PR.IP-1 |
+| **Flash Protection** | HMAC-SHA256 (pending) | CISSP Domain 8 |
+| **Session Management** | Timeout, privilege levels | NIST CSF PR.AC-1 |
+| **Risk Assessment** | CVSS 3.1 scoring (SEC-043) | NIST RMF |
+
+### Security Documentation
+- [Threat Model](docs/THREAT-MODEL.md) - STRIDE analysis
+- [Risk Assessment](docs/risk-assessment.md) - 30 risks identified
+- [Risk Register](docs/risk-register.md) - Mitigation tracking
+- [MISRA Compliance](docs/MISRA_COMPLIANCE.md) - Coding standards
+- [Secure Boot](docs/secure-boot.md) - Bootloader documentation
+
 ---
 
 ## File Structure
@@ -136,36 +179,56 @@ See [docs/design.md](docs/design.md) for complete clock documentation.
 ```
 src/
 ├── main.c                 # Entry point (clock config)
-├── hal_pwm.h/c           # PWM driver with ramping & feedforward ⭐ NEW
-├── hal_adc.h/c           # ADC driver with dual filtering ⭐ NEW
+├── hal_pwm.h/c           # PWM driver with ramping & feedforward
+├── hal_adc.h/c           # ADC driver with dual filtering
 ├── hal_uart.h/c          # UART driver
 ├── hal_watchdog.h/c      # Watchdog driver
 ├── param_calc.h/c        # L/C/ESR calculations
-├── pid_controller.c      # PID with enhancements ⭐ NEW
+├── pid_controller.c      # PID with enhancements
 ├── freertos_tasks.h/c    # RTOS tasks
 ├── error_handler.h/c     # Error management
-├── temperature_monitor.h/c # Thermal management
+├── enhanced_safety.h/c   # Safety framework
 ├── cli_commands.h/c      # CLI implementation
+├── cli_auth.h/c          # Authentication (SEC-031)
+├── setup_gpio.h/c        # Physical confirmation GPIO
 ├── flash_logger.h/c      # Data logging
+├── flash_logger_hmac.h/c # HMAC integrity
+├── temperature_monitor.h/c # Thermal management
 ├── calibration.h/c       # Calibration routines
 ├── current_protection.h  # Overcurrent protection
 └── config.h              # Central configuration
 
-include/
-└── pwm_cli.h             # CLI interface header
-
-cli/
-├── pwm_cli.py            # Python CLI tool
-├── pwmctl.c              # C CLI implementation
-└── config.json           # CLI configuration
+bootloader/
+├── secure_bootloader.c/h # Ed25519 verification
+├── ldscripts/            # Linker scripts
+└── Makefile              # Bootloader build
 
 docs/
-├── index.md              # Documentation index
-├── design.md             # Clock system design ⭐
-├── api.md                # API reference
-├── safety.md             # Safety protocols
-└── (goal/method files in Swedish)
+├── architecture/         # Architecture docs (PWM-ARCH-007)
+├── security/             # Security documentation
+├── THREAT-MODEL.md       # STRIDE analysis
+├── risk-assessment.md    # Risk assessment
+├── risk-register.md      # Risk register
+├── secure-boot.md        # Secure boot docs
+├── MISRA_COMPLIANCE.md   # Coding standards
+└── (other docs)
 
+include/
+├── mbedtls/              # mbedtls config
+└── (headers)
+
+tests/
+├── security/             # Security tests
+├── test_*.c              # Unit tests
+└── (test binaries)
+
+tools/
+└── sign_firmware.py      # Ed25519 signing
+
+keys/
+├── bootloader_private.pem
+├── bootloader_public.pem
+└── bootloader_public_key.c
 ```
 
 ---
@@ -194,6 +257,11 @@ pio run --target upload
 pio device monitor -b 115200
 ```
 
+### Build Status
+- **RAM:** 7.5% (7,344 bytes from 98,304)
+- **Flash:** 9.1% (47,908 bytes from 524,288)
+- **Version:** 2.3.1
+
 ---
 
 ## Usage
@@ -210,6 +278,8 @@ pio device monitor -b 115200
 | ADC_T | PA3 | Temperature | 42 MHz |
 | UART_TX | PA2 | Serial TX | 42 MHz |
 | UART_RX | PA3 | Serial RX | 42 MHz |
+| **BTN_USER** | **PC13** | **Setup confirmation** | **-** |
+| **JP_ALT** | **PA0** | **Alternative confirmation** | **-** |
 
 ### Crystal Requirements
 - **Frequency:** 16 MHz
@@ -227,7 +297,17 @@ pwm <duty|start|stop>      - PWM control
 calibrate <vin> <vout>   - Calibrate ADC
 errors [clear]            - Show/clear error log
 help [command]           - Show help
+login                      - Authenticate (requires password)
+logout                     - End session
+setup                      - First-time password setup (requires button)
 ```
+
+### First-Time Setup (SEC-031)
+1. Device boots in setup mode (no password configured)
+2. User runs `setup` command via CLI
+3. User physically presses PC13 button for 2+ seconds
+4. Password is configured and stored in flash
+5. Subsequent boots require authentication
 
 ---
 
@@ -244,6 +324,15 @@ help [command]           - Show help
 - Overcurrent detection
 - Parameter validation
 - Emergency shutdown
+- **Fault recovery with state machine**
+- **Multi-level safety states**
+
+### Security Protection
+- Password-based authentication
+- Session timeout (5 minutes)
+- Physical confirmation for setup
+- Secure boot with signature verification
+- Flash integrity protection
 
 ### Clock Safety
 - CSS (Clock Security System) enabled
@@ -254,7 +343,7 @@ help [command]           - Show help
 
 ## Algorithms
 
-### PID Control (Enhanced v2.2.1)
+### PID Control (Enhanced)
 ```
 Proportional: P = Kp * (b*setpoint - measurement)
 Integral:     I += Ki * error * dt (with anti-windup)
@@ -301,10 +390,10 @@ Stage 2 (IIR):
 ### PID Settings (`config.h`)
 ```c
 #define DUTY_KP                     0.05f
-#define DUTY_KI                     0.01f       // NEW in v2.2.1
-#define DUTY_KD                     0.001f      // NEW in v2.2.1
-#define PID_SETPOINT_WEIGHT         0.7f        // NEW in v2.2.1
-#define PID_DERIVATIVE_FILTER       0.1f        // NEW in v2.2.1
+#define DUTY_KI                     0.01f
+#define DUTY_KD                     0.001f
+#define PID_SETPOINT_WEIGHT         0.7f
+#define PID_DERIVATIVE_FILTER       0.1f
 ```
 
 ### PWM Ramping (`config.h`)
@@ -323,14 +412,39 @@ Stage 2 (IIR):
 #define ADC_TRANSIENT_THRESHOLD     0.05f       // 5%
 ```
 
+### Security Settings (`config.h`)
+```c
+#define CLI_AUTH_ENABLED            1
+#define CLI_AUTH_HASH_ITERATIONS    100000      // PBKDF2 iterations
+#define CLI_AUTH_SESSION_TIMEOUT_S  300         // 5 minutes
+#define SETUP_CONFIRM_ENABLED       1           // Physical confirmation
+#define SETUP_CONFIRM_GPIO_PORT     GPIOC
+#define SETUP_CONFIRM_GPIO_PIN      GPIO_PIN_13 // PC13 button
+```
+
 ---
 
 ## Testing
 
 ### Unit Tests
 ```bash
-cd test
-python3 -m pytest test_adaptivepwm.py -v
+# Run all tests
+cd tests
+make test
+
+# Individual tests
+./test_thread_safety
+./test_efficiency_calc
+./benchmark_pbkdf2
+```
+
+### Security Tests
+```bash
+cd tests/security
+make
+./test_secure_boot
+./test_auth_timing
+./test_pbkdf2_iterations
 ```
 
 ### Hardware Tests
@@ -339,13 +453,24 @@ python3 -m pytest test_adaptivepwm.py -v
 3. ADC accuracy test (known voltage sources)
 4. Parameter calculation validation
 5. Safety system response test
-6. **NEW:** PID step response test
-7. **NEW:** Ramping behavior verification
-8. **NEW:** Filter noise rejection test
+6. PID step response test
+7. Ramping behavior verification
+8. Filter noise rejection test
+9. **Authentication flow test**
+10. **Secure boot verification**
 
 ---
 
 ## Changelog
+
+### v2.3.1 (2026-04-19) - Security Framework
+- **Security:** CISSP/NIST aligned security framework
+- **SEC-031:** Physical button confirmation for setup
+- **SEC-049:** Secure bootloader with Ed25519
+- **SEC-043:** Formal risk assessment (30 risks)
+- **CLI:** Password authentication with sessions
+- **Documentation:** Threat model, risk register, MISRA compliance
+- **Build:** Fixed STM32F401 compilation (no hardware RNG)
 
 ### v2.2.1 (2026-04-10) - Control System Enhancements
 - **PID:** Added setpoint weighting, derivative on measurement, derivative filtering
@@ -382,6 +507,8 @@ python3 -m pytest test_adaptivepwm.py -v
 - [ ] ADC-PWM hardware synchronization
 - [ ] Auto-tuning for PID gains
 - [ ] Model predictive control (MPC)
+- [ ] Hardware RNG on STM32F405/F407
+- [ ] mbedTLS integration for HMAC
 
 ---
 
@@ -390,9 +517,14 @@ python3 -m pytest test_adaptivepwm.py -v
 - [Changelog](CHANGELOG.md) - Version history
 - [Improvements](IMPROVEMENTS.md) - v2.2.1 enhancements detail
 - [Project Framework](PROJECT_FRAMEWORK.md) - Security framework
+- [Setup Guide](SETUP_GUIDE.md) - Developer setup
 - [Clock Design](docs/design.md) - Clock system documentation
 - [Safety](docs/safety.md) - Safety protocols
 - [API Reference](docs/api.md) - API documentation
+- [Threat Model](docs/THREAT-MODEL.md) - Security threats
+- [Risk Assessment](docs/risk-assessment.md) - Risk analysis
+- [Secure Boot](docs/secure-boot.md) - Bootloader docs
+- [MISRA Compliance](docs/MISRA_COMPLIANCE.md) - Coding standards
 
 ---
 
@@ -401,6 +533,9 @@ python3 -m pytest test_adaptivepwm.py -v
 - Arduino PID Library (br3ttb) - PID algorithm inspiration
 - PIDPWM (AdysTech) - RTOS PID implementation reference
 - Brett Beauregard's PID blog posts
+- NIST SP 800-132 - PBKDF2 recommendations
+- NIST CSF - Cybersecurity Framework
+- IEC 62443 - Industrial security
 
 ---
 
@@ -411,6 +546,11 @@ MIT License - See [LICENSE](LICENSE)
 ## Author
 
 Ola Andersson
-# Project Location
+
+---
+
+## Project Location
+
+**GitHub:** https://github.com/itoaa/adaptivepwm
 
 Note: Project moved from workspace root to projects/ directory.
