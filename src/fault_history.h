@@ -7,6 +7,14 @@
  * Implements circular buffer fault logging to internal Flash memory.
  * Logs survive system resets for post-mortem analysis.
  * Supports predictive maintenance through pattern analysis.
+ * 
+ * FLASH WEAR LEVELING (PWM-ARCH-004):
+ * - Circular buffer with 256 entries
+ * - Even distribution of writes across sector
+ * - Sector erase only when full (128KB sector)
+ * - STM32F401 flash endurance: 10,000 cycles per sector
+ * - At 1 entry/minute: ~27 hours before wrap
+ * - Wear statistics tracking for maintenance planning
  *
  * Framework: CISSP Domain 7, NIST CSF DE.AE, IEC 61508
  */
@@ -112,6 +120,24 @@ typedef struct {
 } FaultStatistics_t;
 
 /**
+ * @brief Flash wear leveling statistics (PWM-ARCH-004)
+ * 
+ * Tracks flash endurance metrics for maintenance planning
+ * and wear distribution analysis.
+ */
+typedef struct {
+    uint32_t total_writes;        // Total write operations to flash
+    uint32_t sector_erases;       // Number of sector erase cycles
+    uint32_t oldest_entry_age;    // Age of oldest entry in writes
+    uint32_t current_index;       // Current write position
+    uint32_t oldest_index;        // Oldest valid entry index
+    uint32_t wrap_count;          // Number of buffer wraps
+    float average_wear;           // Average writes per entry location (0-100%)
+    float max_wear;               // Maximum wear on any location (0-100%)
+    uint32_t estimated_life_pct;  // Estimated remaining flash life (0-100%)
+} FlashWearStats_t;
+
+/**
  * @brief Predictive maintenance indicators
  */
 typedef struct {
@@ -132,9 +158,11 @@ typedef struct {
     uint32_t entry_count;             // Total entries in log
     uint32_t wrap_count;              // Number of times buffer wrapped
     uint32_t last_fault_timestamp;    // Timestamp of last fault
+    uint32_t oldest_index;            // Oldest valid entry index
     uint8_t recovery_attempts;        // Current recovery attempt counter
     bool diagnostic_mode;             // Extended logging enabled
     FaultStatistics_t statistics;   // Running statistics
+    FlashWearStats_t wear_stats;    // Flash wear statistics (PWM-ARCH-004)
 } FaultHistory_t;
 
 // Configuration
@@ -144,6 +172,9 @@ typedef struct {
 #define FAULT_HISTORY_FLASH_SECTOR  FLASH_SECTOR_6  // Use sector 6 (before log sector)
 #define FAULT_HISTORY_FLASH_ADDR    0x080C0000  // Sector 6 base address
 #define FAULT_HISTORY_FLASH_SIZE    0x00020000  // 128KB sector
+
+// STM32F401 flash endurance specification
+#define FLASH_ENDURANCE_CYCLES      10000   // Minimum erase cycles per sector
 
 // Recovery configuration
 #define FAULT_MAX_RETRIES           3       // Max retry attempts
@@ -155,6 +186,11 @@ typedef struct {
 #define MAINTENANCE_FAULT_THRESHOLD     10  // Faults per week triggers maintenance
 #define MAINTENANCE_HEALTH_THRESHOLD    70.0f  // Health score below this triggers warning
 #define MAINTENANCE_DEGRADATION_THRESHOLD 2.0f  // Degradation rate threshold
+
+// Wear leveling thresholds
+#define WEAR_LEVEL_CRITICAL_PCT     80.0f   // Critical wear level warning
+#define WEAR_LEVEL_WARNING_PCT      60.0f   // Warning wear level
+#define WEAR_LEVEL_SAFE_PCT         30.0f   // Safe wear level
 
 /**
  * @brief Initialize fault history system
@@ -179,7 +215,7 @@ bool FaultHistory_Deinit(void);
  * @brief Log a fault event
  * 
  * Records fault to persistent storage and updates statistics.
- * Automatically manages circular buffer wrapping.
+ * Automatically manages circular buffer wrapping with wear leveling.
  *
  * @param fault_type Type of fault
  * @param severity Fault severity
@@ -240,6 +276,27 @@ bool FaultHistory_Clear(void);
  * @param stats Output buffer for statistics
  */
 void FaultHistory_GetStatistics(FaultStatistics_t* stats);
+
+/**
+ * @brief Get flash wear statistics (PWM-ARCH-004)
+ * 
+ * Retrieves flash wear leveling statistics for maintenance planning.
+ * Includes write counts, sector erases, and wear distribution.
+ *
+ * @param stats Output buffer for wear statistics
+ */
+void FaultHistory_GetWearStats(FlashWearStats_t* stats);
+
+/**
+ * @brief Format wear statistics as human-readable string
+ * 
+ * @param stats Wear statistics to format
+ * @param buffer Output buffer
+ * @param size Buffer size
+ * @return Number of bytes written
+ */
+uint16_t FaultHistory_FormatWearStats(const FlashWearStats_t* stats, 
+                                        char* buffer, uint16_t size);
 
 /**
  * @brief Set diagnostic mode
@@ -352,6 +409,25 @@ uint32_t FaultHistory_GetEntriesSince(uint32_t since_timestamp, FaultEntry_t* en
  */
 bool FaultHistory_AnalyzePattern(uint32_t window_ms, bool* burst_detected, 
                                   float* fault_rate);
+
+/**
+ * @brief Validate flash wear leveling integrity (PWM-ARCH-004)
+ * 
+ * Checks if wear leveling state is consistent and
+ * entries are valid. Can be used for diagnostics.
+ *
+ * @param errors_out Output - number of errors found
+ * @return true if validation passed, false if errors found
+ */
+bool FaultHistory_ValidateWearLeveling(uint32_t* errors_out);
+
+/**
+ * @brief Get wear level status string
+ * 
+ * @param wear_pct Wear percentage (0-100)
+ * @return Human-readable status string
+ */
+const char* FaultHistory_GetWearStatusString(float wear_pct);
 
 #ifdef __cplusplus
 }

@@ -4,6 +4,9 @@
  * 
  * Comprehensive error management with safe shutdown
  * and error logging capabilities.
+ * 
+ * SECURITY UPDATE 2026-04-16: PWM-ARCH-001
+ * - Added stack overflow hook declaration (RTOS-002 MAJOR finding)
  */
 
 #ifndef ERROR_HANDLER_H
@@ -25,6 +28,7 @@
 #define ERR_FREERTOS_ASSERT     0x0009
 #define ERR_CLI_AUTH_FAILURE    0x000A
 #define ERR_FLASH_WRITE_FAIL    0x000B
+#define ERR_STACK_OVERFLOW      0x000C  // New: Stack overflow detection (PWM-ARCH-001)
 
 typedef enum {
     SEVERITY_INFO,      // Log only
@@ -113,5 +117,34 @@ void Error_ClearFault(ErrorManager_t* manager);
  * @return Number of bytes written
  */
 uint16_t Error_GetLog(const ErrorManager_t* manager, char* buffer, uint16_t size);
+
+/* ============================================================================
+ * FREERTOS STACK OVERFLOW HOOK
+ * ============================================================================
+ * SECURITY: PWM-ARCH-001 (RTOS-002 MAJOR finding)
+ * 
+ * FreeRTOS stack overflow detection hook. Called when configCHECK_FOR_STACK_OVERFLOW
+ * is enabled and a stack overflow is detected.
+ * 
+ * This function must be defined in the application and linked with FreeRTOS.
+ * It is called from the RTOS kernel when stack overflow is detected.
+ * 
+ * Note: This is called from the context switch ISR, so be careful with
+ * operations that could affect ISR safety.
+ * ============================================================================ */
+
+#ifdef USE_FREERTOS
+  #include "task.h"
+  
+  /**
+   * @brief FreeRTOS stack overflow hook
+   * @param xTask Task handle of the overflowing task
+   * @param pcTaskName Name of the overflowing task
+   * 
+   * Called by FreeRTOS when stack overflow is detected (configCHECK_FOR_STACK_OVERFLOW)
+   * Logs critical error and halts system.
+   */
+  void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName);
+#endif
 
 #endif // ERROR_HANDLER_H

@@ -1,520 +1,523 @@
 # AdaptivePWM Architecture Review Report
 
-**Document ID:** PWM-ARCHITECTURE-REVIEW-2026-04-16  
-**Version:** 2.4.0 (reviewed)  
-**Date:** 2026-04-16  
-**Reviewer:** Architecture Review Subagent  
-**Classification:** Internal / Technical Review
+**Project:** AdaptivePWM  
+**Version:** 2.3.1  
+**Platform:** STM32F401RE + FreeRTOS  
+**Review Date:** 2026-04-16  
+**Reviewer:** coding-agent  
+**Task ID:** PWM-REVIEW-001
 
 ---
 
 ## Executive Summary
 
-This report presents a comprehensive architecture review of AdaptivePWM v2.4.0, a real-time control system for DC/DC converters running on STM32F401RE at 84 MHz with FreeRTOS. The codebase is mature, well-documented, and follows security best practices aligned with CISSP/NIST frameworks. However, several architectural improvements are recommended to reduce coupling, improve testability, and enhance maintainability.
+AdaptivePWM is a well-structured real-time control system for power converters with strong architectural foundations. The codebase demonstrates mature software engineering practices including proper HAL abstraction, FreeRTOS integration, comprehensive safety mechanisms, and security features.
 
-### Key Findings
+### Key Strengths
+- Clean hardware abstraction layer with `Adaptive_` prefix convention
+- Comprehensive safety architecture with fault recovery and graceful degradation
+- Well-documented code with extensive header comments
+- Good separation of concerns between tasks and modules
+- Strong security implementation (PBKDF2, HMAC, CLI authentication)
 
-| Category | Status | Count |
-|----------|--------|-------|
-| Critical Issues | 🔴 | 3 |
-| High Priority | 🟠 | 7 |
-| Medium Priority | 🟡 | 12 |
-| Low Priority | 🟢 | 8 |
-| Strengths | ✅ | 15 |
+### Critical Findings
+- **CRITICAL:** Task stack sizes potentially insufficient for complex call chains
+- **MAJOR:** Control algorithm efficiency calculation needs validation
+- **MAJOR:** Missing hardware RNG integration (stub exists, implementation pending)
 
 ### Overall Assessment
-
-**Architecture Grade: B+**
-
-- **Modularity:** Good separation of concerns with HAL abstraction
-- **Safety:** Excellent safety system with graceful degradation
-- **Security:** Strong security framework with NIST/CISSP alignment
-- **Coupling:** Moderate issues with global state and circular dependencies
-- **Documentation:** Comprehensive, exceeds typical embedded projects
-- **Testability:** Limited unit test coverage, heavy reliance on hardware
+| Category | Rating |
+|----------|--------|
+| Architecture | GOOD |
+| Safety | EXCELLENT |
+| Security | GOOD |
+| Performance | GOOD |
+| Maintainability | GOOD |
 
 ---
 
-## 1. Module Architecture Analysis
+## Architecture Overview
 
-### 1.1 Module Dependency Graph
+### System Block Diagram
 
 ```
-                    ┌─────────────────────────────────────────┐
-                    │           APPLICATION LAYER            │
-                    │  ┌─────────┐ ┌─────────┐ ┌──────────┐  │
-                    │  │   CLI   │ │  Main   │ │   CLI    │  │
-                    │  │Commands │ │  Loop   │ │   Auth   │  │
-                    │  └────┬────┘ └────┬────┘ └────┬─────┘  │
-                    └───────┼───────────┼───────────┼────────┘
-                            │           │           │
-                    ┌───────▼───────────▼───────────▼────────┐
-                    │          CONTROL LAYER                │
-                    │  ┌─────────────┐ ┌────────────────┐  │
-                    │  │  FreeRTOS   │ │  Param Calc    │  │
-                    │  │    Tasks    │ │  (L/C/ESR)     │  │
-                    │  └──────┬──────┘ └───────┬────────┘  │
-                    │         │                │            │
-                    │  ┌──────▼────────────────▼──────┐    │
-                    │  │     PID Controller          │    │
-                    │  │  (Kp/Ki/Kd + Anti-windup)    │    │
-                    │  └──────┬──────────────┬────────┘    │
-                    └─────────┼──────────────┼──────────────┘
-                              │              │
-                    ┌─────────▼──────────────▼─────────────┐
-                    │           SAFETY LAYER               │
-                    │  ┌──────────────┐ ┌──────────────┐   │
-                    │  │   Enhanced   │ │    Error     │   │
-                    │  │    Safety    │ │   Handler    │   │
-                    │  └──────┬───────┘ └──────┬───────┘   │
-                    │         │                 │           │
-                    │  ┌──────▼────────────────▼───────┐   │
-                    │  │    Fault History / Logger     │   │
-                    │  └───────────────────────────────┘   │
-                    └──────────────────┬───────────────────┘
-                                       │
-                    ┌──────────────────▼───────────────────┐
-                    │          HARDWARE ABSTRACTION       │
-                    │  ┌─────────┐ ┌─────────┐ ┌────────┐ │
-                    │  │  PWM    │ │   ADC   │ │  UART  │ │
-                    │  │  (HAL)  │ │  (HAL)  │ │  (HAL) │ │
-                    │  └────┬────┘ └────┬────┘ └───┬────┘ │
-                    │       │           │          │      │
-                    │  ┌────▼────┐ ┌────▼────┐ ┌──▼────┐ │
-                    │  │ Watchdog│ │Thermal  │ │Flash  │ │
-                    │  │   (HAL) │ │Runaway  │ │Logger │ │
-                    │  └─────────┘ └─────────┘ └───────┘ │
-                    └──────────────────────────────────────┘
-                                       │
-                    ┌──────────────────▼───────────────────┐
-                    │           STM32 HAL / CMSIS           │
-                    └───────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                      AdaptivePWM System                         │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
+│  │   Safety     │  │   Control    │  │   Measure    │          │
+│  │   Task       │  │   Task       │  │   Task       │          │
+│  │   (1kHz)     │  │   (100Hz)    │  │   (1kHz)     │          │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
+│         │                 │                 │                    │
+│  ┌──────▼───────────────▼─────────────────▼──────┐            │
+│  │              Enhanced Safety System            │            │
+│  │    (Fault Recovery, Degradation, Watchdog)     │            │
+│  └────────────────────────────────────────────────┘            │
+│                          │                                      │
+│  ┌───────────────────────┼───────────────────────┐             │
+│  │                       │                       │             │
+│  ▼                       ▼                       ▼             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
+│  │    HAL       │  │    HAL       │  │    HAL       │         │
+│  │    PWM       │  │    ADC       │  │    UART      │         │
+│  │  (TIM1)      │  │  (DMA)       │  │  (USART2)    │         │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘         │
+│         │                 │                 │                  │
+│  ┌──────▼─────────────────▼─────────────────▼──────┐          │
+│  │              STM32F401RE Hardware              │          │
+│  │        (84 MHz, FreeRTOS, Peripherals)         │          │
+│  └────────────────────────────────────────────────┘          │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### 1.2 Module Coupling Assessment
+### Clock Architecture
 
-#### 1.2.1 Tight Coupling Issues (CRITICAL)
+| Clock Domain | Frequency | Usage |
+|--------------|-----------|-------|
+| SYSCLK | 84 MHz | CPU, AHB |
+| HCLK | 84 MHz | AHB bus, DMA |
+| PCLK1 | 42 MHz | APB1 (ADC, UART, TIM2-5) |
+| PCLK2 | 84 MHz | APB2 (TIM1 PWM) |
+| ADC CLK | 42 MHz | ADC1 (PCLK2/2) |
+| USB | 48 MHz | USB (via PLLQ) |
 
-| Issue | Severity | Location | Impact |
-|-------|----------|----------|--------|
-| Global State Pollution | 🔴 Critical | `main.c` | Testability severely impacted |
-| Circular Safety Dependencies | 🔴 Critical | `enhanced_safety.c` ↔ `fault_history.c` | Stack overflow risk |
-| Direct HAL Access in Tasks | 🟠 High | `freertos_tasks.c` | Hardware abstraction violation |
-| Cross-Module State Access | 🟠 High | Multiple modules | Race condition risks |
+### Memory Organization
 
-**Detailed Analysis:**
+```
+Flash Layout (512 KB STM32F401RE):
+┌─────────────────┬──────────┬────────────────────────────────┐
+│ Sector 0-4      │ 128 KB   │ Application Code               │
+│ Sector 5        │ 128 KB   │ Auth Credentials (0x080C0000) │
+│ Sector 6        │ 128 KB   │ HMAC Key Storage (0x080D0000)   │
+│ Sector 7        │ 128 KB   │ Flash Logger (0x080E0000)       │
+└─────────────────┴──────────┴────────────────────────────────┘
 
-1. **Global State Pollution (`main.c`)**
-   - All major handles declared as global externals
-   - 8+ global handles accessible to any module
-   - Violates encapsulation principle
-   - Makes unit testing nearly impossible
-
-2. **Circular Dependencies**
-   ```
-   enhanced_safety.c → fault_history.c
-           ↑                    ↓
-           └────── fault_handler.c ←─┘
-   ```
-   - Creates brittle architecture
-   - Initialization order dependencies
-   - Hard to reason about state
-
-#### 1.2.2 Dependency Analysis
-
-**Fan-Out Analysis (Modules a Module Depends On):**
-
-| Module | Fan-Out | Risk Level |
-|--------|---------|------------|
-| main.c | 14 | 🔴 High |
-| freertos_tasks.c | 9 | 🟠 Medium |
-| enhanced_safety.c | 6 | 🟡 Acceptable |
-| hal_pwm.c | 4 | 🟢 Low |
-| hal_adc.c | 4 | 🟢 Low |
-| pid_controller.c | 2 | 🟢 Low |
-
-**Fan-In Analysis (Modules Depending on This Module):**
-
-| Module | Fan-In | Risk Level |
-|--------|--------|------------|
-| config.h | 23 | 🔴 Critical (God header) |
-| error_handler.h | 12 | 🟠 Medium |
-| stm32f4xx_hal.h | 18 | 🟡 Acceptable (external) |
-
-### 1.3 HAL Abstraction Quality
-
-**Assessment: GOOD**
-
-| Aspect | Status | Notes |
-|--------|--------|-------|
-| Prefix Consistency | ✅ | `Adaptive_` prefix prevents HAL conflicts |
-| Header Encapsulation | ✅ | All HAL types hidden in .c files |
-| Error Handling | ✅ | Boolean return + error propagation |
-| Initialization Pattern | ✅ | Consistent Init/Deinit pattern |
-| Hardware Specificity | ⚠️ | Some modules assume STM32F401 specifics |
-
-**Recommendations:**
-1. Consider runtime HAL selection for portability
-2. Abstract clock configurations behind interface
+RAM Layout (128 KB + 16 KB CCM):
+┌─────────────────┬──────────┬────────────────────────────────┐
+│ SRAM            │ 128 KB   │ Main RAM (stack, heap, data)   │
+│ CCM             │ 16 KB    │ Fast RAM (optional use)        │
+└─────────────────┴──────────┴────────────────────────────────┘
+```
 
 ---
 
-## 2. Code Quality Review
+## Detailed Analysis
 
-### 2.1 Static Analysis Summary
+### 1. Hardware Abstraction Layer (HAL) - GOOD
 
-Based on manual code review against MISRA-C:2012 and CERT C:
+#### 1.1 ADC HAL (`hal_adc.c/h`)
 
-| Category | Count | Severity |
-|----------|-------|----------|
-| Rule 11.x (Pointer conversions) | 3 | Advisory |
-| Rule 13.x (Complex initialization) | 2 | Advisory |
-| CERT EXP46-C | 1 | Medium |
-| Missing const correctness | 8 | Low |
-| Unused parameters | 4 | Low |
-| Magic numbers | 12 | Low |
+**Architecture:**
+- Clean abstraction with DMA-based continuous sampling
+- Dual-stage filtering (IIR + Moving Average)
+- Adaptive sampling rate during transients
+- Four channels: Vin, Vout, Current, Temperature
 
-### 2.2 Complexity Metrics
+**Code Quality:**
+- Proper use of `ADAPTIVE_ASSERT` for parameter validation
+- Good separation between raw acquisition and processing
+- Circular DMA buffer with automatic processing
 
-**Cyclomatic Complexity (Estimated):**
+**Findings:**
+| ID | Severity | Finding | Task |
+|----|----------|---------|------|
+| ADP-001 | MINOR | Moving average index updates only on last channel, could cause phase misalignment between channels | PWM-ARCH-003 |
+| ADP-002 | MINOR | Temperature conversion uses simplified linear model, should use Steinhart-Hart for NTC | PWM-ARCH-003 |
+| ADP-003 | MINOR | `adc_dma_complete` flag in ISR not volatile-correct for multi-core (not issue on single-core STM32) | - |
 
-| Function | Complexity | Risk |
-|----------|------------|------|
-| `EnhancedSafety_Process()` | 18 | 🟠 High |
-| `PID_Compute()` | 12 | 🟡 Medium |
-| `CLI_ProcessCommand()` | 15 | 🟠 High |
-| `Tasks_Init()` | 9 | 🟢 Acceptable |
-| `Adaptive_PWM_SetDuty()` | 8 | 🟢 Acceptable |
+#### 1.2 PWM HAL (`hal_pwm.c/h`)
 
-**Recommendation:** Refactor functions with complexity > 10
+**Architecture:**
+- TIM1 on APB2 for full 84 MHz resolution
+- Complementary outputs with dead-time insertion
+- Hysteresis to prevent duty cycle flutter
+- Setpoint ramping for smooth transitions
 
-### 2.3 Documentation Coverage
+**Code Quality:**
+- Clean state machine with proper initialization
+- Good safety limits (hard/soft min/max duty)
+- Emergency stop via hardware break input
 
-| Module | Header Docs | Implementation | Examples | Grade |
-|--------|-------------|----------------|----------|-------|
-| hal_pwm | ✅ Complete | ✅ Good | ⚠️ Basic | A- |
-| hal_adc | ✅ Complete | ✅ Good | ⚠️ Basic | A- |
-| enhanced_safety | ✅ Excellent | ✅ Excellent | ✅ Good | A |
-| pid_controller | ✅ Complete | ✅ Good | ✅ Good | A |
-| freertos_tasks | ✅ Good | ⚠️ Minimal | ❌ None | B+ |
-| cli_commands | ✅ Good | ⚠️ Minimal | ⚠️ Basic | B |
+**Findings:**
+| ID | Severity | Finding | Task |
+|----|----------|---------|------|
+| PWM-001 | MINOR | `DEBUG_PRINT_EVERY_N` macro may not be thread-safe under FreeRTOS | PWM-ARCH-002 |
+| PWM-002 | MINOR | Dead-time calculation assumes fixed 84 MHz, could be dynamic | - |
 
-### 2.4 Configuration Management
+#### 1.3 UART HAL (`hal_uart.c/h`)
 
-**Config.h Analysis:**
+**Architecture:**
+- Standard async UART with ring buffers
+- Command processing for CLI
+- Integrated with authentication system
 
-- **Lines:** 400+ (excessive)
-- **Categories:** 12
-- **Interdependencies:** High
-- **Versioning:** Good (major.minor.patch)
+**Findings:**
+| ID | Severity | Finding | Task |
+|----|----------|---------|------|
+| UART-001 | MINOR | TX buffer overflow handling not present | PWM-ARCH-002 |
+
+---
+
+### 2. Real-Time Operating System (FreeRTOS) - GOOD
+
+#### 2.1 Task Structure
+
+| Task | Priority | Stack (words) | Period | Purpose |
+|------|----------|---------------|--------|---------|
+| Safety | 4 | 128 | 10 ms | Fault detection & emergency stop |
+| Measure | 3 | 256 | 1 ms | ADC sampling & filtering |
+| Control | 2 | 256 | 10 ms | Efficiency control loop |
+| CLI | 1 | 512 | 20 ms | User interface |
+
+#### 2.2 Inter-Task Communication
+
+- **Semaphores:** `adc_ready_sem`, `pwm_ready_sem`, `params_ready_sem`
+- **Queues:** `duty_queue` (4×float), `error_queue` (4×uint32_t)
+- **Shared Data:** Global handles with proper access patterns
+
+#### 2.3 Findings
+
+| ID | Severity | Finding | Task |
+|----|----------|---------|------|
+| RTOS-001 | **CRITICAL** | Stack sizes of 128-256 words may be insufficient for worst-case call depth + ISR nesting | PWM-ARCH-001 |
+| RTOS-002 | MAJOR | No stack overflow detection configured | PWM-ARCH-001 |
+| RTOS-003 | MINOR | Bare-metal fallback stubs don't implement full FreeRTOS semantics | - |
+| RTOS-004 | MINOR | Task stats use `xPortGetFreeHeapSize()` which only works with heap_3/4/5 | PWM-ARCH-002 |
+
+**Stack Analysis:**
+```
+Safety Task (128 words = 512 bytes):
+  - Task context: ~64 bytes
+  - ISR nesting: ~128 bytes (est.)
+  - Call chain: ~200 bytes
+  - Margin: ~120 bytes (TIGHT)
+
+Recommendation: Increase to 192-256 words minimum
+```
+
+---
+
+### 3. Control Algorithms - NEEDS IMPROVEMENT
+
+#### 3.1 PID Controller (`pid_controller.c`)
+
+**Architecture:**
+- Full PID with anti-windup via integral clamping and back-calculation
+- Derivative on measurement (prevents derivative kick)
+- Setpoint weighting for proportional term
+- Derivative low-pass filtering
+
+**Code Quality:**
+- Well-structured with proper initialization
+- Good documentation of algorithm choices
+
+**Findings:**
+| ID | Severity | Finding | Task |
+|----|----------|---------|------|
+| PID-001 | MINOR | Static `d_filtered_prev` prevents multiple PID instances | PWM-ARCH-003 |
+
+#### 3.2 Parameter Calculation (`param_calc.c`)
+
+**Architecture:**
+- Calculates L, C, ESR from ripple measurements
+- RMS-based ripple calculation
+- Frequency detection via zero-crossing
+
+**Findings:**
+| ID | Severity | Finding | Task |
+|----|----------|---------|------|
+| CALC-001 | **MAJOR** | Efficiency calculation in control task uses simplified loss model without validation against actual converter topology | PWM-ARCH-005 |
+| CALC-002 | MINOR | Frequency detection assumes continuous conduction mode | PWM-ARCH-003 |
+| CALC-003 | MINOR | Inductance calculation formula assumes ideal inductor without core losses | - |
+
+#### 3.3 Control Task (`freertos_tasks.c`)
+
+**Critical Issue - Efficiency Calculation:**
+
+The current efficiency calculation is overly simplified:
+
+```c
+// From freertos_tasks.c Task_Control()
+float switching_loss = 0.01f * calc_params.inductance_mH * 
+                      current_duty_cycle * current_duty_cycle;
+float conduction_loss = calc_params.esr_mOhm / 1000.0f * 
+                       calc_params.ripple_current * calc_params.ripple_current;
+float efficiency = 1.0f - (switching_loss + conduction_loss);
+```
 
 **Issues:**
-1. God configuration file - handles all aspects
-2. Feature flags scattered throughout
-3. Some security-critical values (PBKDF2 iterations) could be runtime configurable
+1. Switching loss formula appears to be placeholder/empirical
+2. No consideration of gate drive losses
+3. No consideration of core losses
+4. Duty cycle efficiency calculation not appropriate for all topologies
+5. Proportional control gain fixed, no adaptive tuning
 
-**Recommendation:** Split config.h into:
-- `config_clock.h` - Clock system
-- `config_pwm.h` - PWM configuration
-- `config_adc.h` - ADC configuration
-- `config_security.h` - Security parameters
-- `config_safety.h` - Safety thresholds
+**Recommendation:** Validate efficiency model against actual measurements or use closed-loop efficiency measurement (input power vs output power).
 
 ---
 
-## 3. Performance Assessment
+### 4. Safety Architecture - EXCELLENT
 
-### 3.1 RTOS Task Analysis
+#### 4.1 Enhanced Safety System (`enhanced_safety.c/h`)
 
-**Current Task Configuration:**
+**Architecture:**
+- Multi-state safety machine with graceful degradation
+- Automatic fault recovery with backoff
+- Module-level watchdog for subsystem monitoring
+- CRC protection for critical safety data
+- Diagnostic mode with timeout
 
-| Task | Priority | Period | WCET (est) | Utilization | Status |
-|------|----------|--------|------------|-------------|--------|
-| Safety | 4 (High) | 10 ms | 2 ms | 20% | ✅ |
-| Measurement | 3 | 1 ms | 0.5 ms | 50% | ⚠️ |
-| Control | 2 | 10 ms | 3 ms | 30% | ✅ |
-| CLI | 1 (Low) | 20 ms | 5 ms | 25% | ✅ |
+**States:**
+```
+INIT → NORMAL → [DEGRADED_PWM/DEGRADED_ADC/RECOVERY] → [SAFE_STOP/EMERGENCY]
+```
 
-**Total CPU Utilization:** ~50% (Safe for 100 Hz control loop)
+**Findings:**
+| ID | Severity | Finding | Task |
+|----|----------|---------|------|
+| SAFE-001 | MINOR | CRC calculation function not implemented (stub) | PWM-ARCH-003 |
+| SAFE-002 | MINOR | Module watchdog timeouts not configurable per-module | - |
 
-**Concerns:**
-1. Measurement task at 1 kHz may be excessive
-2. CLI task can block for up to 5ms on complex commands
-3. No watchdog task-level monitoring (only module-level)
+#### 4.2 Fault History (`fault_history.c/h`)
 
-### 3.2 Memory Usage
+**Architecture:**
+- Circular flash-based fault logging
+- HMAC-SHA256 integrity protection (SEC-023)
+- Chain validation for tamper detection
 
-**Flash Memory (512 KB total):**
+**Findings:**
+| ID | Severity | Finding | Task |
+|----|----------|---------|------|
+| FH-001 | MINOR | Flash wear leveling documented but not fully implemented | PWM-ARCH-004 |
 
-| Component | Size | Percentage |
-|-----------|------|------------|
-| Application Code | ~35 KB | 6.8% |
-| HAL + CMSIS | ~25 KB | 4.9% |
-| FreeRTOS | ~8 KB | 1.6% |
-| **Total Used** | **~68 KB** | **13.3%** |
-| **Available** | **~444 KB** | **86.7%** |
+#### 4.3 Error Handler (`error_handler.c/h`)
 
-**RAM Memory (96 KB total):**
-
-| Component | Size | Percentage |
-|-----------|------|------------|
-| Static Variables | ~8 KB | 8.3% |
-| Stack (tasks) | ~4 KB | 4.2% |
-| Heap (FreeRTOS) | ~4 KB | 4.2% |
-| DMA Buffers | ~1 KB | 1.0% |
-| **Total Used** | **~17 KB** | **17.7%** |
-| **Available** | **~79 KB** | **82.3%** |
-
-**Memory Health:** ✅ Good headroom available
-
-### 3.3 Timing Analysis
-
-**ADC → PWM Latency Chain:**
-
-| Stage | Nominal | Worst-Case | Budget |
-|-------|---------|------------|--------|
-| ADC Sampling | 1.95 µs | 2.1 µs | ✅ |
-| DMA Transfer | <1 µs | 2 µs | ✅ |
-| Processing (1 kHz) | 50 µs | 200 µs | ✅ |
-| Task Scheduling | 0-1 ms | 1 ms | ✅ |
-| PWM Update | <1 µs | 1 µs | ✅ |
-| **Total** | **~1.1 ms** | **~1.2 ms** | **< 10 ms** ✅ |
-
-**Jitter Analysis:**
-- Control loop: < 1 ms jitter (acceptable for 100 Hz)
-- Safety loop: < 0.5 ms jitter (good for 100 Hz)
-
-### 3.4 Bottlenecks
-
-1. **Flash Logger Writes:** Synchronous flash writes block for ~20-50ms
-2. **CLI Command Processing:** Complex commands (faults, diagnostic) take 2-5ms
-3. **Parameter Calculation:** L/C/ESR calculations on 256-sample buffer CPU-intensive
+**Architecture:**
+- Centralized error reporting with severity levels
+- Circular buffer for error history
+- Integration with fault history
 
 ---
 
-## 4. Safety System Review
+### 5. Security Architecture - GOOD
 
-### 4.1 Safety Architecture Assessment
+#### 5.1 CLI Authentication (`cli_auth.c/h`)
 
-**Grade: A (Excellent)**
+**Architecture:**
+- PBKDF2 password hashing (now 100,000 iterations - SEC-027) ✓
+- Session timeout with configurable duration
+- Account lockout after failed attempts
+- Flash-based credential storage with CRC
 
-| Feature | Implementation | Status |
-|---------|---------------|--------|
-| Watchdog (IWDG) | ✅ Hardware + Software | ✅ |
-| Temperature Monitoring | ✅ Multi-level with derating | ✅ |
-| Overcurrent Protection | ✅ Hardware + Software | ✅ |
-| Emergency Stop | ✅ Hardware break input | ✅ |
-| Graceful Degradation | ✅ 5 degradation levels | ✅ |
-| Fault Recovery | ✅ Auto-recovery with backoff | ✅ |
-| CRC Validation | ✅ Critical data protected | ✅ |
-| Thermal Runaway | ✅ dT/dt detection | ✅ |
+**Findings:**
+| ID | Severity | Finding | Task |
+|----|----------|---------|------|
+| SEC-001 | MINOR | Salt generation uses software LCG PRNG (SEC-033 addresses this) | SEC-033 |
+| SEC-002 | MINOR | No first-time password physical confirmation (SEC-031) | SEC-031 |
+| SEC-003 | MINOR | Credentials in Flash Sector 5 without hardware protection | - |
 
-### 4.2 Fault Handling Coverage
+#### 5.2 Flash Logger HMAC (`flash_logger_hmac.c/h`)
 
-**Fault Types vs. Handling:**
-
-| Fault Type | Detection | Response | Logging | Recovery |
-|------------|-----------|----------|---------|----------|
-| Overvoltage | ✅ | ✅ | ✅ | Manual |
-| Undervoltage | ✅ | ✅ | ✅ | Auto |
-| Overcurrent | ✅ | ✅ | ✅ | Degraded |
-| Overtemp | ✅ | ✅ | ✅ | Degraded |
-| Thermal Runaway | ✅ | ✅ | ✅ | Manual |
-| Watchdog Timeout | ✅ | ✅ | ✅ | Reset |
-| ADC Failure | ✅ | ✅ | ✅ | Degraded |
-| PWM Fault | ✅ | ✅ | ✅ | Manual |
-
-### 4.3 Safety Gaps
-
-1. **No External Watchdog:** Relies solely on internal IWDG
-2. **CRC Weakness:** Using CRC16, consider CRC32 or cryptographic hash
-3. **No Redundant ADC:** Single ADC for safety-critical measurements
-4. **Flash Wear:** Logging every fault may wear flash prematurely
+**Architecture:**
+- HMAC-SHA256 for log entry integrity
+- Chain validation for sequence integrity
+- Key storage in dedicated flash sector
 
 ---
 
-## 5. Security Assessment
+### 6. Code Structure - GOOD
 
-### 5.1 Security Framework Alignment
+#### 6.1 File Organization
 
-**CISSP Domains Coverage:**
+```
+src/
+├── config.h              # Central configuration (excellent)
+├── main.c                # Entry point
+├── freertos_tasks.c/h    # FreeRTOS task management
+├── hal_adc.c/h           # ADC HAL
+├── hal_pwm.c/h           # PWM HAL
+├── hal_uart.c/h          # UART HAL
+├── hal_watchdog.c/h      # Watchdog HAL
+├── pid_controller.c      # PID implementation
+├── param_calc.c/h        # Parameter calculation
+├── error_handler.c/h     # Error management
+├── enhanced_safety.c/h   # Safety system
+├── temperature_monitor.c/h # Temperature handling
+├── fault_history.c/h     # Fault logging
+├── cli_auth.c/h          # Authentication
+├── cli_commands.c/h      # CLI implementation
+├── current_protection.c/h # Current limiting
+├── calibration.c/h       # Calibration routines
+└── safety/               # Safety subsystem
+    ├── thermal_runaway.c/h
+    └── ...
 
-| Domain | Coverage | Grade |
-|--------|----------|-------|
-| Domain 3: Security Architecture | ✅ Comprehensive | A |
-| Domain 5: IAM | ✅ UART Auth + PBKDF2 | A |
-| Domain 6: Security Assessment | ⚠️ Limited testing | B |
-| Domain 7: Operations | ✅ Fault logging | A- |
-| Domain 8: Software Security | ✅ MISRA/CERT | A- |
+include/
+└── pwm_cli.h             # Public CLI interface
 
-### 5.2 Authentication System
+tests/                    # Unit and security tests
+docs/                     # Documentation
+```
 
-**PBKDF2-SHA256 Implementation:**
+#### 6.2 Naming Conventions
 
-- **Iterations:** 100,000 (NIST compliant) ✅
-- **Salt Generation:** Hardware RNG (STM32F401) ✅
-- **Session Timeout:** 300 seconds ✅
-- **Lockout:** 3 attempts / 5 minutes ✅
-- **Key Storage:** Flash (not encrypted) ⚠️
+| Element | Convention | Status |
+|---------|------------|--------|
+| Functions | `Module_VerbNoun()` | ✓ Good |
+| Types | `ModuleName_t` | ✓ Good |
+| Constants | `UPPER_CASE` | ✓ Good |
+| Globals | `g_` or descriptive | ✓ Good |
+| HAL prefix | `Adaptive_` | ✓ Good |
 
-**Security Gaps:**
-1. Password hash stored unencrypted in flash
-2. No secure boot implemented
-3. No firmware signature verification
-4. JTAG/SWD not disabled in production builds
+#### 6.3 Documentation Quality
 
-### 5.3 Threat Model Coverage
-
-**STRIDE Analysis (from threat-model.md):**
-
-| Threat | Mitigation | Status |
-|--------|------------|--------|
-| Spoofing | UART Auth | ✅ |
-| Tampering | HMAC-SHA256 on logs | ✅ |
-| Repudiation | Timestamped audit logs | ✅ |
-| Information Disclosure | Auth required for status | ✅ |
-| DoS | Watchdog, rate limiting | ⚠️ |
-| Elevation | No privilege levels | 🔴 |
-
----
-
-## 6. Testing & Validation
-
-### 6.1 Test Coverage
-
-**Unit Tests (tests/ directory):**
-
-| Module | Tests | Coverage | Status |
-|--------|-------|----------|--------|
-| cli_auth | 15+ | Good | ✅ |
-| thermal_runaway | 5+ | Good | ✅ |
-| flash_logger_hmac | 4+ | Good | ✅ |
-
-**Missing Coverage:**
-- ❌ No HAL layer tests
-- ❌ No PID controller tests
-- ❌ No safety system tests
-- ❌ No FreeRTOS task tests
-- ❌ No parameter calculation tests
-
-### 6.2 Hardware-in-Loop
-
-**Status:** Not implemented
-
-**Recommendation:** Use Renode or QEMU for integration testing
-
-### 6.3 Static Analysis Tools
-
-| Tool | Status | Notes |
-|------|--------|-------|
-| Cppcheck | ⚠️ Configured, not automated | Add to CI/CD |
-| PC-lint Plus | ❌ Not configured | Commercial license needed |
-| Clang Static Analyzer | ❌ Not used | Free alternative |
-| Coverity | ❌ Not used | Consider for production |
+- Excellent header comments with file descriptions
+- Function documentation with parameters/returns
+- Security task references in comments
+- Clock configuration well-documented
 
 ---
 
-## 7. Summary of Findings
+### 7. Build System - GOOD
 
-### 7.1 Critical Issues (Must Fix)
+#### 7.1 PlatformIO Configuration (`platformio.ini`)
 
-1. **CRIT-001:** Global state pollution in main.c - Use dependency injection
-2. **CRIT-002:** Circular dependencies in safety modules - Refactor into layers
-3. **CRIT-003:** Synchronous flash writes block system - Use async/queue pattern
+**Environments:**
+- `nucleo_f401re` - Release build
+- `nucleo_f401re_debug` - Debug with assertions
+- `nucleo_f401re_profile` - Profiling build
+- `nucleo_f401re_test` - Test environment
+- `ci` - CI/CD with strict warnings
 
-### 7.2 High Priority Issues
+**Features:**
+- Framework enforcement scripts
+- Security build flags
+- Static analysis integration (cppcheck, clang-tidy)
 
-1. **HIGH-001:** Config.h is a God header - Split into focused configs
-2. **HIGH-002:** No privilege escalation protection - Add role-based access
-3. **HIGH-003:** Missing unit tests for core modules - Add PID, HAL tests
-4. **HIGH-004:** CLI commands can block too long - Add timeout mechanism
-5. **HIGH-005:** No redundant ADC for safety - Consider external watchdog ADC
-6. **HIGH-006:** JTAG not disabled - Add production build flag
-7. **HIGH-007:** Complex functions (>10 CC) - Refactor for maintainability
+#### 7.2 Makefile
 
-### 7.3 Strengths
+**Security Targets (SEC-038):**
+- `security-cppcheck` - Cppcheck security scan
+- `security-clang-tidy` - Clang-tidy security scan
+- `security-tests` - Security test suite
 
-1. ✅ **Excellent Safety System:** Industry-leading graceful degradation
-2. ✅ **Strong Security Framework:** NIST/CISSP aligned
-3. ✅ **Good HAL Abstraction:** Clean interfaces with proper prefixes
-4. ✅ **Comprehensive Documentation:** Doxygen + security docs
-5. ✅ **Version Control:** Semantic versioning + detailed changelog
-6. ✅ **Fault Recovery:** Sophisticated auto-recovery with backoff
-7. ✅ **Hardware RNG:** Proper use of STM32F401 security features
-8. ✅ **Clock Optimization:** Well-designed clock tree
-9. ✅ **Dual Filtering:** Thoughtful ADC signal conditioning
-10. ✅ **Thermal Protection:** Multiple temperature safeguards
+#### 7.3 Findings
 
----
-
-## 8. Recommendations Summary
-
-### Immediate Actions (Next Sprint)
-
-1. Refactor global state in main.c to use context struct
-2. Split config.h into focused configuration files
-3. Add unit tests for PID controller
-4. Implement async flash logging
-
-### Short-term (Next Month)
-
-1. Refactor safety module circular dependencies
-2. Add role-based CLI access control
-3. Implement hardware-in-loop testing
-4. Add static analysis to CI/CD
-
-### Long-term (Next Quarter)
-
-1. Port to hardware abstraction for other MCUs
-2. Add redundant ADC for safety-critical paths
-3. Implement secure boot
-4. Achieve MISRA-C:2012 full compliance
+| ID | Severity | Finding | Task |
+|----|----------|---------|------|
+| BUILD-001 | MINOR | Linker script not reviewed for stack/heap placement | PWM-ARCH-006 |
+| BUILD-002 | MINOR | No explicit check for flash/RAM usage limits | PWM-ARCH-006 |
 
 ---
 
-## Appendix A: File Metrics
+## Findings Summary
 
-| File | Lines | Functions | Complexity | Grade |
-|------|-------|-----------|------------|-------|
-| main.c | 298 | 6 | Medium | B+ |
-| hal_pwm.c | 245 | 12 | Low | A- |
-| hal_adc.c | 312 | 10 | Medium | A- |
-| enhanced_safety.c | 485 | 25 | High | B+ |
-| pid_controller.c | 178 | 9 | Low | A |
-| freertos_tasks.c | 280 | 15 | Medium | B+ |
-| cli_commands.c | 425 | 22 | High | B |
+### CRITICAL (1)
 
----
+| ID | Title | Severity | Task |
+|----|-------|----------|------|
+| RTOS-001 | Task stack sizes insufficient for worst-case call depth | CRITICAL | PWM-ARCH-001 |
 
-## Appendix B: Architecture Decision Records
+### MAJOR (2)
 
-### ADR-001: Global State Management
+| ID | Title | Severity | Task |
+|----|-------|----------|------|
+| CALC-001 | Efficiency calculation uses unvalidated simplified model | MAJOR | PWM-ARCH-005 |
+| RTOS-002 | No stack overflow detection configured | MAJOR | PWM-ARCH-001 |
 
-**Status:** Accepted (Legacy)  
-**Date:** 2026-02-27  
-**Context:** Early development chose global state for simplicity  
-**Decision:** Use extern handles in main.c  
-**Consequences:** Easy access but poor testability  
-**Recommendation:** Refactor to context struct
+### MINOR (15)
 
-### ADR-002: FreeRTOS vs Bare Metal
-
-**Status:** Accepted  
-**Date:** 2026-02-27  
-**Context:** Need task scheduling for multiple rates  
-**Decision:** FreeRTOS with bare metal fallback stubs  
-**Consequences:** Good portability, slightly more overhead  
-**Recommendation:** Keep current approach
-
-### ADR-003: Safety Module Architecture
-
-**Status:** Accepted  
-**Date:** 2026-04-11  
-**Context:** Need comprehensive safety with recovery  
-**Decision:** Layered safety with graceful degradation  
-**Consequences:** Complex but robust safety system  
-**Recommendation:** Keep, but refactor circular dependencies
+| ID | Title | Task |
+|----|-------|------|
+| ADP-001 | Moving average index updates only on last channel | PWM-ARCH-003 |
+| ADP-002 | Temperature uses linear model instead of Steinhart-Hart | PWM-ARCH-003 |
+| PWM-001 | DEBUG_PRINT_EVERY_N may not be thread-safe | PWM-ARCH-002 |
+| PWM-002 | Dead-time calculation assumes fixed clock | - |
+| UART-001 | TX buffer overflow handling missing | PWM-ARCH-002 |
+| RTOS-003 | Bare-metal stubs incomplete | - |
+| RTOS-004 | Task stats heap size check wrong for heap_1/2 | PWM-ARCH-002 |
+| PID-001 | Static filter prevents multiple PID instances | PWM-ARCH-003 |
+| CALC-002 | Frequency detection assumes CCM | PWM-ARCH-003 |
+| CALC-003 | Inductance calc assumes ideal inductor | - |
+| SAFE-001 | CRC calculation not implemented | PWM-ARCH-003 |
+| FH-001 | Flash wear leveling not fully implemented | PWM-ARCH-004 |
+| SEC-001 | Salt uses software PRNG (SEC-033) | SEC-033 |
+| BUILD-001 | Linker script not reviewed | PWM-ARCH-006 |
+| BUILD-002 | No flash/RAM usage checks | PWM-ARCH-006 |
 
 ---
 
-**End of Report**
+## Recommendations
+
+### Priority 1: Critical Fixes
+
+1. **PWM-ARCH-001:** Increase task stack sizes and add stack overflow detection
+   - Safety: 128 → 192 words
+   - Measure: 256 → 384 words
+   - Control: 256 → 384 words
+   - Enable FreeRTOS stack overflow checking
+
+### Priority 2: Major Improvements
+
+2. **PWM-ARCH-005:** Validate efficiency calculation model
+   - Add input/output power measurement
+   - Compare calculated vs measured efficiency
+   - Consider topology-specific loss models
+
+3. **PWM-ARCH-001:** Configure FreeRTOS stack overflow detection
+   - Enable `configCHECK_FOR_STACK_OVERFLOW`
+   - Implement hook function
+
+### Priority 3: Minor Improvements
+
+4. **PWM-ARCH-003:** Fix ADC moving average synchronization
+5. **PWM-ARCH-003:** Implement proper temperature curve (Steinhart-Hart)
+6. **PWM-ARCH-002:** Add thread-safety to debug macros
+7. **PWM-ARCH-003:** Fix PID static variable for multi-instance support
+8. **PWM-ARCH-004:** Complete flash wear leveling implementation
+9. **PWM-ARCH-006:** Review linker script for memory layout
+
+---
+
+## Implementation Plan
+
+### Proposed Task Breakdown
+
+| Task ID | Title | Priority | Effort | Dependencies |
+|---------|-------|----------|--------|--------------|
+| PWM-ARCH-001 | Fix FreeRTOS Stack Configuration | HIGH | 2h | None |
+| PWM-ARCH-002 | Thread Safety Fixes for Debug/UART | MEDIUM | 3h | None |
+| PWM-ARCH-003 | HAL Algorithm Improvements | MEDIUM | 4h | None |
+| PWM-ARCH-004 | Complete Flash Wear Leveling | MEDIUM | 3h | None |
+| PWM-ARCH-005 | Validate Efficiency Calculation Model | HIGH | 4h | None |
+| PWM-ARCH-006 | Linker Script Review and Optimization | LOW | 2h | None |
+| PWM-ARCH-007 | Code Documentation Improvements | LOW | 2h | None |
+| PWM-ARCH-008 | Unit Test Coverage Expansion | MEDIUM | 6h | None |
+| PWM-ARCH-009 | Performance Profiling Integration | LOW | 3h | None |
+| PWM-ARCH-010 | MISRA-C Compliance Review | MEDIUM | 8h | None |
+
+---
+
+## Conclusion
+
+AdaptivePWM demonstrates solid architectural foundations with excellent safety and good security implementation. The critical finding (RTOS-001) regarding stack sizes should be addressed immediately to prevent potential stack overflow in production. The efficiency calculation model (CALC-001) requires validation to ensure control accuracy.
+
+The codebase is well-maintained with good documentation and clear module boundaries. With the recommended improvements, the system will be more robust and maintainable.
+
+**Overall Grade: B+** (Good architecture with minor critical issues to address)
+
+---
+
+## References
+
+- STM32F401RE Reference Manual (RM0368)
+- FreeRTOS Documentation v10.4
+- MISRA-C:2012 Guidelines
+- CISSP Common Body of Knowledge
+- NIST Cybersecurity Framework v1.1
+
+---
+
+*Document generated: 2026-04-16*  
+*Review completed: PWM-REVIEW-001*

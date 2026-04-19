@@ -2,9 +2,9 @@
 
 ## Complete Framework Installation
 
-**Version:** 2.1.0  
+**Version:** 2.3.1  
 **Framework:** CISSP-Aligned Security  
-**Date:** 2026-03-21
+**Date:** 2026-04-16
 
 ---
 
@@ -15,6 +15,7 @@ This guide sets up the complete AdaptivePWM development environment with:
 - ✅ Git hooks for pre-commit validation
 - ✅ Security review templates
 - ✅ Quick reference documentation
+- ✅ **Physical confirmation for first-time setup (SEC-031)**
 
 ---
 
@@ -108,13 +109,195 @@ pio run -e nucleo_f401re
 
 ---
 
-## Step 6: Review Documentation
+## Step 6: Hardware Setup (STM32F401RE)
+
+### Physical Confirmation Setup (SEC-031)
+
+**Security Feature:** First-time password setup requires physical confirmation to prevent remote attackers from setting passwords before the legitimate owner gains physical access.
+
+#### Required Hardware
+
+| Component | Default Pin | Alternative | Mode |
+|-----------|-------------|-------------|------|
+| Setup Button | PA0 | - | Button mode |
+| Setup Jumper | PA8 | PA0 | Jumper mode |
+
+#### Wiring Diagram
+
+```
+STM32F401RE Nucleo Board
+
+PA0 (Button mode):
+    ┌─────────────────┐
+    │ PA0 ────┬───┐  │
+    │         │   │  │
+    │      [BUTTON]  │
+    │         │   │  │
+    │         └───┘  │
+    │           │    │
+    └───────────┼────┘
+                │
+               GND
+
+PA8 (Jumper mode):
+    ┌─────────────────┐
+    │ PA8 ────┬───┐  │
+    │         │ J │  │
+    │         │ U │  │
+    │         │ M │  │
+    │         │ P │  │
+    │         │ E │  │
+    │         │ R │  │
+    │         └───┘  │
+    │           │    │
+    └───────────┼────┘
+                │
+               GND
+
+Configuration:
+- Pull-up enabled internally
+- Button press or jumper connect = pin goes LOW
+- 50ms debounce for button
+- 100ms minimum press duration required
+```
+
+#### Setup Modes (config.h)
+
+```c
+// Configure in src/config.h
+
+// Mode selection:
+#define SETUP_MODE_NONE      0   // Disabled (dev only)
+#define SETUP_MODE_BUTTON    1   // PA0 button
+#define SETUP_MODE_JUMPER    2   // PA8 jumper
+#define SETUP_MODE_BOTH      3   // Either button or jumper
+
+// Default (recommended): BUTTON mode
+#ifndef SETUP_CONFIRM_MODE
+    #define SETUP_CONFIRM_MODE SETUP_MODE_BUTTON
+#endif
+
+// Timeout: 30 seconds
+#ifndef SETUP_TIMEOUT_MS
+    #define SETUP_TIMEOUT_MS 30000
+#endif
+
+// Button debounce: 50ms
+#ifndef SETUP_BUTTON_DEBOUNCE_MS
+    #define SETUP_BUTTON_DEBOUNCE_MS 50
+#endif
+
+// Minimum press: 100ms
+#ifndef SETUP_BUTTON_PRESS_MIN_MS
+    #define SETUP_BUTTON_PRESS_MIN_MS 100
+#endif
+```
+
+#### First-Time Setup Procedure
+
+**When password is not set:**
+
+1. **Connect hardware:**
+   - Connect PA0 to button (for BUTTON mode)
+   - Or connect PA8 to jumper (for JUMPER mode)
+
+2. **Power on the device:**
+   ```bash
+   pio run --target upload
+   ```
+
+3. **First login attempt:**
+   ```
+   login mypassword123
+   ```
+
+4. **System response:**
+   ```
+   *** FIRST-TIME SETUP ***
+   Physical confirmation required for security.
+   Mode: BUTTON (PA0)
+
+   Please press and hold the setup button...
+   Timeout: 30 seconds
+   ```
+
+5. **Physical confirmation:**
+   - Press and hold button for at least 100ms
+   - Or install jumper (for JUMPER mode)
+
+6. **Success:**
+   ```
+   Physical confirmation received!
+   Setting initial password...
+   Password set successfully!
+   Jumper can be removed now.
+   Authentication successful
+   ```
+
+#### Security Rationale
+
+**Without physical confirmation:**
+- Remote attacker could set password if they gain UART access before owner
+- No way to verify legitimate owner has physical device
+
+**With physical confirmation:**
+- Attacker must have physical access to device
+- Legitimate owner must press button/install jumper
+- Creates "air gap" for initial setup
+
+**Framework Compliance:**
+- CISSP Domain 5: Identity and Access Management
+- NIST CSF 2.0: PR.AC-01 (Access Control)
+- ISO 27001:2022: A.9.4 (Access control)
+- Security Assessment: ADP-IAM-001 (CVSS 5.3 - MEDIUM)
+
+#### Troubleshooting Setup Confirmation
+
+**Problem: "Physical confirmation timeout"**
+
+**Causes:**
+- Button not connected properly
+- Jumper not installed (for JUMPER mode)
+- Wrong GPIO pin configuration
+- Timeout too short
+
+**Solutions:**
+1. Check wiring with multimeter
+2. Verify pin state: `authstatus` command
+3. Check mode in config.h
+4. Increase timeout if needed
+
+**Problem: Button bounces / false triggers**
+
+**Solutions:**
+- Increase debounce time: `SETUP_BUTTON_DEBOUNCE_MS`
+- Use hardware debounce (RC filter)
+- Check button quality
+
+**Problem: Want to disable for development**
+
+**Option 1: Disable in build**
+```bash
+pio run -e nucleo_f401re --build-flag="-DSETUP_CONFIRM_MODE=SETUP_MODE_NONE"
+```
+
+**Option 2: Edit config.h (temporary)**
+```c
+#define SETUP_CONFIRM_MODE SETUP_MODE_NONE
+```
+
+**⚠️ Never disable in production builds!**
+
+---
+
+## Step 7: Review Documentation
 
 **Required reading for all developers:**
 
 1. **PROJECT_FRAMEWORK.md** - Governance and security requirements
 2. **QUICK_REFERENCE.md** - Daily workflow and commands
 3. **docs/design.md** - Clock system and architecture
+4. **SETUP_GUIDE.md** - This file (physical confirmation)
 
 ```bash
 # Quick review
@@ -303,6 +486,29 @@ mv .git/hooks-disabled .git/hooks
 
 **⚠️ Never push code that bypasses framework!**
 
+### Issue: "Physical confirmation not working"
+
+**Solution:**
+```bash
+# 1. Check auth status
+authstatus
+# Should show: Setup confirmation: BUTTON (PA0)
+
+# 2. Verify pin configuration
+cat src/config.h | grep SETUP_CONFIRM
+
+# 3. Test with debug build
+pio run -e nucleo_f401re_debug
+
+# 4. Check wiring with multimeter
+# PA0 or PA8 should be HIGH when open
+# Should go LOW when button pressed/jumper installed
+
+# 5. For development only, disable:
+# Add to platformio.ini build_flags:
+# -DSETUP_CONFIRM_MODE=SETUP_MODE_NONE
+```
+
 ---
 
 ## Available Commands Reference
@@ -334,6 +540,22 @@ git commit --no-verify                # Bypass hooks (emergency)
 git log --oneline -10                 # Recent commits
 ```
 
+### Security
+
+```bash
+# Check auth status
+authstatus
+
+# Login
+login <password>
+
+# Change password (when authenticated)
+passwd <new_password>
+
+# Logout
+logout
+```
+
 ---
 
 ## File Organization
@@ -344,6 +566,7 @@ AdaptivePWM/
 ├── QUICK_REFERENCE.md        # ← Daily reference
 ├── CHANGELOG.md              # ← Update per change
 ├── README.md                 # ← Project overview
+├── SETUP_GUIDE.md            # ← This file (physical confirmation)
 ├── platformio.ini            # ← Build config (includes framework check)
 │
 ├── docs/                     # ← Documentation (REQUIRED)
@@ -356,7 +579,9 @@ AdaptivePWM/
 │
 ├── src/                      # ← Source code
 │   ├── main.c               # ← Entry point + clock config
-│   ├── config.h             # ← Central config
+│   ├── config.h             # ← Central config (physical confirmation settings)
+│   ├── cli_auth.c/h         # ← Authentication (SEC-031)
+│   ├── setup_gpio.c/h       # ← Physical confirmation (SEC-031)
 │   └── hal_*.c/h            # ← HAL drivers
 │
 ├── ci/                       # ← CI/CD scripts
@@ -371,6 +596,44 @@ AdaptivePWM/
 
 ---
 
+## Security Feature Summary
+
+### Implemented Features
+
+| Feature | Status | Reference |
+|---------|--------|-----------|
+| UART CLI Authentication | ✅ | SEC-019 |
+| PBKDF2-SHA256 (100K iter) | ✅ | SEC-027 |
+| Hardware RNG (STM32 TRNG) | ✅ | SEC-033 |
+| **Physical Confirmation** | ✅ | **SEC-031** |
+| Account Lockout | ✅ | - |
+| Session Timeout | ✅ | - |
+
+### Physical Confirmation Details
+
+**Configuration Options:**
+```c
+// src/config.h
+
+SETUP_CONFIRM_ENABLED       // 1 = enabled, 0 = disabled
+SETUP_CONFIRM_MODE          // BUTTON, JUMPER, or BOTH
+SETUP_CONFIRM_GPIO_PORT     // GPIOA (default)
+SETUP_CONFIRM_GPIO_PIN      // PA0 (default button)
+SETUP_CONFIRM_ALT_GPIO_PIN  // PA8 (default jumper)
+SETUP_TIMEOUT_MS            // 30000 (30 seconds)
+SETUP_BUTTON_DEBOUNCE_MS    // 50 (milliseconds)
+SETUP_BUTTON_PRESS_MIN_MS   // 100 (milliseconds)
+```
+
+**Security Benefits:**
+- Prevents remote password setting
+- Requires physical presence
+- Configurable for different hardware
+- Timeout protection
+- Debounced input for reliability
+
+---
+
 ## Success Criteria
 
 Before you start developing, verify:
@@ -381,18 +644,8 @@ Before you start developing, verify:
 - [ ] Read PROJECT_FRAMEWORK.md
 - [ ] Read QUICK_REFERENCE.md
 - [ ] Read docs/design.md (clock system)
-
----
-
-## Support
-
-| Resource | Purpose |
-|----------|---------|
-| QUICK_REFERENCE.md | Daily commands and workflow |
-| PROJECT_FRAMEWORK.md | Governance and requirements |
-| docs/design.md | Architecture details |
-| docs/api.md | API reference |
-| docs/safety.md | Security protocols |
+- [ ] Read this SETUP_GUIDE.md (physical confirmation)
+- [ ] Hardware setup understood (PA0/PA8)
 
 ---
 
@@ -408,8 +661,23 @@ Before you start developing, verify:
 □ Read PROJECT_FRAMEWORK.md
 □ Read QUICK_REFERENCE.md
 □ Read docs/design.md
+□ Read SETUP_GUIDE.md (this file)
+□ Understood physical confirmation wiring
 □ Ready to develop!
 ```
+
+---
+
+## Support
+
+| Resource | Purpose |
+|----------|---------|
+| QUICK_REFERENCE.md | Daily commands and workflow |
+| PROJECT_FRAMEWORK.md | Governance and requirements |
+| docs/design.md | Architecture details |
+| docs/api.md | API reference |
+| docs/safety.md | Security protocols |
+| SETUP_GUIDE.md | This file (physical confirmation) |
 
 ---
 
@@ -418,6 +686,7 @@ Before you start developing, verify:
 2. Update documentation
 3. Commit (test hooks)
 4. Verify framework compliance
-5. Start real development
+5. Test physical confirmation on hardware
+6. Start real development
 
 **Questions?** See QUICK_REFERENCE.md or PROJECT_FRAMEWORK.md

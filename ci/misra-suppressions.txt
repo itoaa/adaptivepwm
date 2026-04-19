@@ -1,0 +1,133 @@
+# ============================================================================
+# MISRA-C:2012 Suppressions for AdaptivePWM
+# ============================================================================
+#
+# This file contains approved MISRA-C:2012 rule suppressions.
+# Each suppression must have a documented justification.
+#
+# Format: misra-c:2012 RULE-XX-Y:FILE:LINE or just RULE-XX-Y
+# ============================================================================
+
+# ============================================================================
+# HAL-LAYER RELATED SUPPRESSIONS
+# ============================================================================
+#
+# These suppressions are for code that interacts with the STM32 HAL library.
+# The HAL uses patterns that violate MISRA but are outside our control.
+
+# Rule 11.3: Cast from pointer to pointer (HAL callbacks)
+# HAL uses void* for generic callbacks, requires cast to specific types
+misra-c:2012:11.3
+
+# Rule 11.4: Pointer to incomplete type (HAL handles)
+# HAL handle structures are often opaque pointers
+misra-c:2012:11.4
+
+# Rule 11.5: Cast from void pointer to object pointer
+# Standard HAL pattern for passing user data through callbacks
+misra-c:2012:11.5
+
+# Rule 17.7: Return value not used (HAL debug/output functions)
+# Debug output and non-critical HAL calls may not check return values
+# These are safe because failures don't affect safety-critical paths
+misra-c:2012:17.7:src/cli_commands.c
+
+# ============================================================================
+# EMBEDDED SYSTEM PRACTICES
+# ============================================================================
+#
+# These suppressions are for patterns common in embedded systems
+# that would violate MISRA but are necessary for the platform.
+
+# Rule 18.4: Pointer arithmetic (array indexing required)
+# DMA buffer processing requires pointer arithmetic for efficiency
+# Alternative would be array indexing which is equivalent
+misra-c:2012:18.4:src/hal_adc.c
+
+# Rule 14.6: Break in loops (used in error handling)
+# Break statements are used in switch cases and some error recovery loops
+# All uses are documented and safe
+misra-c:2012:14.6
+
+# Rule 15.5: Multiple exit points (guard clauses)
+# Early returns used for parameter validation to reduce nesting
+# This is a defensive coding pattern with controlled complexity
+misra-c:2012:15.5:src/hal_pwm.c
+misra-c:2012:15.5:src/hal_adc.c
+misra-c:2012:15.5:src/error_handler.c
+misra-c:2012:15.5:src/pid_controller.c
+misra-c:2012:15.5:src/cli_auth.c
+misra-c:2012:15.5:src/cli_commands.c
+misra-c:2012:15.5:src/flash_logger.c
+misra-c:2012:15.5:src/flash_logger_hmac.c
+misra-c:2012:15.5:src/temperature_monitor.c
+misra-c:2012:15.5:src/calibration.c
+misra-c:2012:15.5:src/efficiency_calc.c
+misra-c:2012:15.5:src/enhanced_safety.c
+misra-c:2012:15.5:src/param_calc.c
+misra-c:2012:15.5:src/current_protection.c
+misra-c:2012:15.5:src/fault_history.c
+misra-c:2012:15.5:src/freertos_tasks.c
+misra-c:2012:15.5:src/hal_uart.c
+misra-c:2012:15.5:src/hal_watchdog.c
+misra-c:2012:15.5:src/setup_gpio.c
+
+# ============================================================================
+# INTERRUPT SERVICE ROUTINES
+# ============================================================================
+#
+# ISR context requires special handling that may violate MISRA
+
+# Rule 17.8: Function parameter modified (ISR callbacks)
+# HAL ISR callbacks modify peripheral handles
+misra-c:2012:17.8:src/main.c:268-280
+
+# ============================================================================
+# THIRD-PARTY CODE
+# ============================================================================
+#
+# FreeRTOS and HAL library code - outside project control
+
+# All third-party code in tests/ directory
+misra-c:2012:*:tests/*
+
+# Third-party headers
+misra-c:2012:*:include/pwm_cli.h
+
+# ============================================================================
+# EXPLICIT LINE-SPECIFIC SUPPRESSIONS
+# ============================================================================
+#
+# These are specific lines with documented justifications.
+
+# hal_pwm.c: NS_TO_TICKS macro uses integer arithmetic
+# This is necessary for timer tick calculation
+misra-c:2012:10.1:src/hal_pwm.c:25
+
+# hal_pwm.c: Duty cycle calculations with float to uint32
+# Required for PWM hardware register values
+misra-c:2012:10.3:src/hal_pwm.c:180-200
+
+# hal_adc.c: DMA buffer pointer arithmetic
+# Required for circular DMA buffer processing
+misra-c:2012:18.1:src/hal_adc.c:200-220
+
+# main.c: SystemCoreClock is volatile modified in HAL
+# This is expected behavior from HAL RCC code
+misra-c:2012:8.5:src/main.c:350
+
+# ============================================================================
+# ADDITIONAL NOTES
+# ============================================================================
+#
+# Suppression Process:
+# 1. Each suppression must be reviewed and approved
+# 2. Justification must document why it's necessary
+# 3. Mitigation must describe how risk is managed
+# 4. All suppressions are reviewed quarterly
+#
+# Review History:
+# - 2026-04-18: Initial suppression list created
+# - Next review: 2026-07-18
+#
+# ============================================================================

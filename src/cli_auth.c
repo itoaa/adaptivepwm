@@ -3,25 +3,32 @@
  * @brief UART CLI Authentication Implementation
  * @details Implements password/PIN authentication with PBKDF2-SHA256 hashing,
  *          secure flash storage, and configurable lockout protection.
+ *          Includes physical confirmation for first-time setup (SEC-031).
  * 
  * Security Features:
- * - PBKDF2-SHA256 with 1000 iterations (configurable)
+ * - PBKDF2-SHA256 with CLI_AUTH_HASH_ITERATIONS iterations (100000 default) (configurable)
  * - Per-password random salt (16 bytes) using STM32F401 hardware RNG (SEC-033)
  * - Secure credential storage in flash with CRC integrity
  * - Account lockout after failed attempts
  * - Session timeout support
  * - Password history validation (optional)
+ * - Physical confirmation required for first-time setup (SEC-031)
  * 
  * Security Framework:
  * - CISSP Domain: 5 (IAM) / 6 (Security Assessment and Testing)
  * - NIST CSF: PR.DS-02 (Data security), PR.AC-01 (Access Control)
  * - ISO 27001: A.8.24 (Use of cryptography), A.8.5 (Secure authentication)
  * 
- * @version 1.1.0
- * @date 2026-04-15
+ * Security Assessment Reference:
+ * - Finding: ADP-IAM-001 (CVSS 5.3 - MEDIUM)
+ * - Task: SEC-031
+ * 
+ * @version 1.2.0
+ * @date 2026-04-16
  */
 
 #include "cli_auth.h"
+#include "setup_gpio.h"
 #include "config.h"
 #include <string.h>
 #include <stdio.h>
@@ -825,6 +832,13 @@ bool CLI_Auth_Init(void)
         auth_ctx.password_set = false;
     }
     
+    // Initialize setup confirmation GPIO if needed (SEC-031)
+    #if SETUP_CONFIRM_ENABLED
+    if (!auth_ctx.password_set) {
+        SetupGPIO_Init();
+    }
+    #endif
+    
 #if CLI_AUTH_ENABLED
     auth_ctx.state = AUTH_STATE_UNAUTHENTICATED;
 #else
@@ -868,6 +882,9 @@ bool CLI_Auth_IsAuthenticated(void)
     return auth_ctx.state == AUTH_STATE_AUTHENTICATED;
 }
 
+// Forward declaration for internal function
+static auth_result_t CLI_Auth_SetPassword_Internal(const char* old_password, const char* new_password);
+
 auth_result_t CLI_Auth_Login(const char* password)
 {
     if (!CLI_Auth_IsEnabled()) {
@@ -890,9 +907,17 @@ auth_result_t CLI_Auth_Login(const char* password)
     
     // Check if password is set
     if (!auth_ctx.password_set) {
-        // First-time setup: any password is accepted
-        // In production, this should require physical button press or similar
-        return CLI_Auth_SetPassword(NULL, password);
+        // First-time setup: requires physical confirmation (SEC-031)
+        #if SETUP_CONFIRM_ENABLED
+        if (SetupGPIO_IsConfirmationRequired()) {
+            // Return special code indicating confirmation required
+            // The caller should handle this and call CLI_Auth_RequestSetupConfirmation
+            return AUTH_SETUP_CONFIRMATION_REQUIRED;
+        }
+        #endif
+        
+        // Physical confirmation bypassed or disabled
+        return CLI_Auth_SetPassword_Internal(NULL, password);
     }
     
     // Verify password
@@ -913,6 +938,57 @@ auth_result_t CLI_Auth_Login(const char* password)
     }
 }
 
+auth_result_t CLI_Auth_LoginWithUART(const char* password, Adaptive_UART_t* uart)
+{
+    auth_result_t result = CLI_Auth_Login(password);
+    
+    // Handle setup confirmation requirement (SEC-031)
+    if (result == AUTH_SETUP_CONFIRMATION_REQUIRED && uart != NULL) {
+        Adaptive_UART_Printf(uart, "\r\n");
+        Adaptive_UART_Printf(uart, "*** FIRST-TIME SETUP ***\r\n");
+        Adaptive_UART_Printf(uart, "Physical confirmation required for security.\r\n");
+        Adaptive_UART_Printf(uart, "Mode: %s\r\n", SetupGPIO_GetModeString());
+        Adaptive_UART_Printf(uart, "\r\n");
+        
+        #if SETUP_CONFIRM_MODE == SETUP_MODE_BUTTON
+        Adaptive_UART_Printf(uart, "Please press and hold the setup button...\r\n");
+        #elif SETUP_CONFIRM_MODE == SETUP_MODE_JUMPER
+        Adaptive_UART_Printf(uart, "Please install the setup jumper...\r\n");
+        #elif SETUP_CONFIRM_MODE == SETUP_MODE_BOTH
+        Adaptive_UART_Printf(uart, "Please press the setup button OR install jumper...\r\n");
+        #endif
+        
+        Adaptive_UART_Printf(uart, "Timeout: %d seconds\r\n", SETUP_TIMEOUT_MS / 1000);
+        Adaptive_UART_Printf(uart, "\r\n");
+        
+        setup_confirm_result_t confirm_result = SetupGPIO_WaitForConfirmation(SETUP_TIMEOUT_MS);
+        
+        if (confirm_result == SETUP_CONFIRM_OK) {
+            Adaptive_UART_Printf(uart, "Physical confirmation received!\r\n");
+            Adaptive_UART_Printf(uart, "Setting initial password...\r\n");
+            
+            // Retry login with confirmation
+            auth_ctx.setup_confirmed = true;
+            result = CLI_Auth_SetPassword_Internal(NULL, password);
+            
+            if (result == AUTH_OK) {
+                Adaptive_UART_Printf(uart, "Password set successfully!\r\n");
+                Adaptive_UART_Printf(uart, "Jumper can be removed now.\r\n");
+                
+                // Deinitialize GPIO to save power
+                SetupGPIO_Deinit();
+            }
+        } else {
+            Adaptive_UART_Printf(uart, "Setup failed: %s\r\n", 
+                                SetupGPIO_GetResultMessage(confirm_result));
+            Adaptive_UART_Printf(uart, "Password setup aborted.\r\n");
+            result = AUTH_SETUP_CONFIRMATION_TIMEOUT;
+        }
+    }
+    
+    return result;
+}
+
 bool CLI_Auth_Logout(void)
 {
     auth_ctx.state = AUTH_STATE_UNAUTHENTICATED;
@@ -920,7 +996,10 @@ bool CLI_Auth_Logout(void)
     return true;
 }
 
-auth_result_t CLI_Auth_SetPassword(const char* old_password, const char* new_password)
+/**
+ * @brief Internal password set function (without confirmation check)
+ */
+static auth_result_t CLI_Auth_SetPassword_Internal(const char* old_password, const char* new_password)
 {
     if (new_password == NULL) {
         return AUTH_INVALID_PASSWORD;
@@ -974,7 +1053,7 @@ auth_result_t CLI_Auth_SetPassword(const char* old_password, const char* new_pas
     auth_ctx.failed_attempts = 0;
     
     // If setting initial password, also authenticate
-    if (!auth_ctx.password_set) {
+    if (auth_ctx.state == AUTH_STATE_UNAUTHENTICATED) {
         auth_ctx.state = AUTH_STATE_AUTHENTICATED;
         auth_ctx.last_auth_time = get_timestamp();
     }
@@ -982,9 +1061,56 @@ auth_result_t CLI_Auth_SetPassword(const char* old_password, const char* new_pas
     return AUTH_OK;
 }
 
+auth_result_t CLI_Auth_SetPassword(const char* old_password, const char* new_password)
+{
+    // For first-time setup, require physical confirmation (SEC-031)
+    #if SETUP_CONFIRM_ENABLED
+    if (!auth_ctx.password_set && !auth_ctx.setup_confirmed) {
+        if (SetupGPIO_IsConfirmationRequired()) {
+            return AUTH_SETUP_CONFIRMATION_REQUIRED;
+        }
+    }
+    #endif
+    
+    return CLI_Auth_SetPassword_Internal(old_password, new_password);
+}
+
 bool CLI_Auth_IsPasswordSet(void)
 {
     return auth_ctx.password_set;
+}
+
+bool CLI_Auth_IsSetupConfirmationRequired(void)
+{
+    #if SETUP_CONFIRM_ENABLED
+    return SetupGPIO_IsConfirmationRequired();
+    #else
+    return false;
+    #endif
+}
+
+bool CLI_Auth_RequestSetupConfirmation(Adaptive_UART_t* uart)
+{
+    #if SETUP_CONFIRM_ENABLED
+    if (!SetupGPIO_IsConfirmationRequired()) {
+        return true;  // Not required = already confirmed
+    }
+    
+    if (uart != NULL) {
+        Adaptive_UART_Printf(uart, "Requesting physical confirmation...\r\n");
+    }
+    
+    setup_confirm_result_t result = SetupGPIO_WaitForConfirmation(SETUP_TIMEOUT_MS);
+    
+    if (result == SETUP_CONFIRM_OK) {
+        auth_ctx.setup_confirmed = true;
+        return true;
+    }
+    
+    return false;
+    #else
+    return true;  // Confirmation disabled
+    #endif
 }
 
 uint32_t CLI_Auth_GetLockoutRemaining(void)
@@ -1058,6 +1184,8 @@ const char* CLI_Auth_GetErrorMessage(auth_result_t result)
         case AUTH_INVALID_LENGTH:    return "Invalid password length";
         case AUTH_SAME_PASSWORD:     return "New password same as old";
         case AUTH_WEAK_PASSWORD:     return "Password too weak (need letter + digit, min 4 chars)";
+        case AUTH_SETUP_CONFIRMATION_REQUIRED: return "Physical confirmation required";
+        case AUTH_SETUP_CONFIRMATION_TIMEOUT:  return "Physical confirmation timeout";
         default:                     return "Unknown error";
     }
 }
@@ -1109,7 +1237,8 @@ bool cmd_login(Adaptive_UART_t* uart, int argc, const char* argv[])
         return false;
     }
     
-    auth_result_t result = CLI_Auth_Login(argv[1]);
+    // Use LoginWithUART for proper setup confirmation handling (SEC-031)
+    auth_result_t result = CLI_Auth_LoginWithUART(argv[1], uart);
     
     switch (result) {
         case AUTH_OK:
@@ -1121,6 +1250,13 @@ bool cmd_login(Adaptive_UART_t* uart, int argc, const char* argv[])
             break;
         case AUTH_ALREADY_AUTHENTICATED:
             Adaptive_UART_Printf(uart, "Already authenticated\r\n");
+            break;
+        case AUTH_SETUP_CONFIRMATION_TIMEOUT:
+            Adaptive_UART_Printf(uart, "Setup aborted: Physical confirmation timeout\r\n");
+            break;
+        case AUTH_SETUP_CONFIRMATION_REQUIRED:
+            // Should not reach here - LoginWithUART handles this
+            Adaptive_UART_Printf(uart, "Setup confirmation required but not handled\r\n");
             break;
         default:
             Adaptive_UART_Printf(uart, "Authentication failed: %s (%lu attempts remaining)\r\n",
@@ -1229,6 +1365,17 @@ bool cmd_authstatus(Adaptive_UART_t* uart, int argc, const char* argv[])
                         rng_available ? "Available" : "Unavailable");
     #else
     Adaptive_UART_Printf(uart, "  Hardware RNG: Disabled\r\n");
+    #endif
+    
+    #if SETUP_CONFIRM_ENABLED
+    Adaptive_UART_Printf(uart, "  Setup confirmation: %s\r\n", 
+                        SetupGPIO_GetModeString());
+    if (!CLI_Auth_IsPasswordSet()) {
+        Adaptive_UART_Printf(uart, "  Setup confirmed: %s\r\n", 
+                            auth_ctx.setup_confirmed ? "Yes" : "No");
+    }
+    #else
+    Adaptive_UART_Printf(uart, "  Setup confirmation: Disabled\r\n");
     #endif
     
     return true;

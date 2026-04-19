@@ -1,0 +1,90 @@
+# Clang-Tidy Security Configuration for AdaptivePWM
+# CISSP Domain 6 / ISO 27001:2022 8.25 / NIST CSF DE.AE
+#
+# Security-focused configuration based on CERT C, CWE, and MISRA guidelines
+
+---
+# Checks grouped by security category
+Checks: >
+  # C++ Core Guidelines - Security related
+  cppcoreguidelines-*,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-avoid-c-arrays,
+  
+  # Security checks - ALL
+  security-*,
+  
+  # Bug prone patterns that often lead to security issues
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-macro-parentheses,
+  
+  # CERT C Secure Coding Standard
+  cert-*,
+  -cert-err33-c,  # Allow embedded error handling patterns
+  
+  # Performance - memory safety
+  performance-*,
+  -performance-unnecessary-value-param,
+  
+  # Portability
+  portability-*,
+  
+  # Readability - clarity for security review
+  readability-*,
+  -readability-magic-numbers,
+  -readability-named-parameter,
+  -readability-function-cognitive-complexity,
+  -readability-identifier-length,
+
+# Header filter
+HeaderFilterRegex: '.*'
+
+# Format style
+FormatStyle: file
+
+# Check options for security
+CheckOptions:
+  # Integer overflow detection
+  - key: readability-suspicious-missing-comma.MaxConcatenatedTokens
+    value: 5
+  
+  # Function complexity limits (security reviewability)
+  - key: readability-function-cognitive-complexity.Threshold
+    value: 25
+  
+  # String bounds
+  - key: bugprone-argument-comment.StrictMode
+    value: 1
+  
+  # Null pointer detection
+  - key: readability-implicit-bool-conversion.AllowPointerConditions
+    value: 0
+  
+  # Array bounds
+  - key: cppcoreguidelines-pro-bounds-constant-array-index.GslLikeClasses
+    value: '::gsl::span'
+  
+  # Memory safety
+  - key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
+    value: 0
+  
+  # Security - dangerous functions
+  - key: cert-err33-c.AllowCastFuncCall
+    value: 0
+  
+  # Secure coding
+  - key: bugprone-unchecked-optional-access.IgnoreSmartPointerDereference
+    value: 0
+
+# Warnings as errors for security-critical issues
+WarningsAsErrors: >
+  security-*,
+  bugprone-*,
+  cert-*,
+  
+# Embedded system specific - allow some flexibility for hardware access
+ExtraArgs:
+  - -Wno-unknown-warning-option
+  - --system-headers
+  - -D__clang_tidy__

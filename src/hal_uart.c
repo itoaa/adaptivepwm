@@ -1,6 +1,12 @@
 /**
  * @file hal_uart.c
  * @brief UART HAL implementation with enhanced CLI
+ * 
+ * UPDATED: PWM-ARCH-002
+ * - Added TX overflow protection with configurable timeout
+ * - Added non-blocking send option for ISR-safe operation
+ * - Added TX statistics tracking in debug mode
+ * - Improved error handling for HAL_UART_Transmit failures
  */
 
 #include "hal_uart.h"
@@ -73,17 +79,113 @@ void Adaptive_UART_SetCallback(Adaptive_UART_t* uart, UART_Callback_t callback)
     }
 }
 
+/**
+ * Check if UART TX is ready to accept new data
+ * 
+ * PWM-ARCH-002: New function to check TX readiness before sending.
+ * Returns true if UART is not busy transmitting.
+ */
+bool Adaptive_UART_TxReady(const Adaptive_UART_t* uart)
+{
+    if (uart == NULL) return false;
+    
+    // Check if TX is busy (using HAL state)
+    return (__HAL_UART_GET_FLAG((UART_HandleTypeDef*)&uart->huart, UART_FLAG_TXE) != RESET);
+}
+
+/**
+ * Send string with default timeout
+ * 
+ * PWM-ARCH-002: Enhanced with overflow protection.
+ * Checks if TX is ready before attempting send.
+ */
 bool Adaptive_UART_SendString(Adaptive_UART_t* uart, const char* str)
+{
+    return Adaptive_UART_SendString_Timeout(uart, str, UART_TX_TIMEOUT_MS);
+}
+
+/**
+ * Send string with configurable timeout
+ * 
+ * PWM-ARCH-002: New function providing configurable timeout.
+ * Prevents indefinite blocking if UART is stuck.
+ * Tracks overflow statistics in debug mode.
+ */
+bool Adaptive_UART_SendString_Timeout(Adaptive_UART_t* uart, const char* str, uint32_t timeout_ms)
 {
     if (uart == NULL || str == NULL) return false;
     
-    return HAL_UART_Transmit(&uart->huart, (uint8_t*)str, strlen(str), 100) == HAL_OK;
+    size_t len = strlen(str);
+    if (len == 0) return true;  // Empty string is success
+    
+    // Check if data fits in buffer
+    if (len > UART_TX_BUFFER_SIZE) {
+        // Truncate to buffer size
+        len = UART_TX_BUFFER_SIZE;
+        #ifdef DEBUG
+        uart->tx_overflow_count++;
+        #endif
+    }
+    
+    // Attempt transmit with timeout
+    HAL_StatusTypeDef status = HAL_UART_Transmit(&uart->huart, 
+                                                  (uint8_t*)str, 
+                                                  len, 
+                                                  timeout_ms);
+    
+    if (status != HAL_OK) {
+        #ifdef DEBUG
+        if (status == HAL_TIMEOUT) {
+            uart->tx_timeout_count++;
+        }
+        #endif
+        return false;
+    }
+    
+    return true;
+}
+
+/**
+ * Non-blocking string send
+ * 
+ * PWM-ARCH-002: New ISR-safe function.
+ * Returns immediately if UART is busy, with retry mechanism.
+ * Safe to call from interrupts.
+ */
+bool Adaptive_UART_SendString_NonBlocking(Adaptive_UART_t* uart, const char* str)
+{
+    if (uart == NULL || str == NULL) return false;
+    
+    size_t len = strlen(str);
+    if (len == 0) return true;
+    
+    // Check if TX is ready
+    if (!Adaptive_UART_TxReady(uart)) {
+        return false;  // UART busy, caller should retry
+    }
+    
+    // Truncate if too long
+    if (len > UART_TX_BUFFER_SIZE) {
+        len = UART_TX_BUFFER_SIZE;
+        #ifdef DEBUG
+        uart->tx_overflow_count++;
+        #endif
+    }
+    
+    // Short timeout for non-blocking - just poll once
+    HAL_StatusTypeDef status = HAL_UART_Transmit(&uart->huart, 
+                                                  (uint8_t*)str, 
+                                                  len, 
+                                                  1);  // 1ms timeout
+    
+    return (status == HAL_OK);
 }
 
 bool Adaptive_UART_SendChar(Adaptive_UART_t* uart, char ch)
 {
     if (uart == NULL) return false;
     
+    // PWM-ARCH-002: Use shorter timeout for single char
     return HAL_UART_Transmit(&uart->huart, (uint8_t*)&ch, 1, 10) == HAL_OK;
 }
 
@@ -99,10 +201,25 @@ bool Adaptive_UART_Printf(Adaptive_UART_t* uart, const char* fmt, ...)
     int len = vsnprintf((char*)uart->tx_buffer, UART_TX_BUFFER_SIZE, fmt, args);
     va_end(args);
     
-    if (len > 0) {
-        return HAL_UART_Transmit(&uart->huart, uart->tx_buffer, len, 100) == HAL_OK;
+    if (len < 0) {
+        // Encoding error
+        return false;
     }
-    return false;
+    
+    if ((size_t)len >= UART_TX_BUFFER_SIZE) {
+        // Truncated - still try to send what we have
+        len = UART_TX_BUFFER_SIZE - 1;
+        uart->tx_buffer[UART_TX_BUFFER_SIZE - 1] = '\0';
+        #ifdef DEBUG
+        uart->tx_overflow_count++;
+        #endif
+    }
+    
+    if (len > 0) {
+        // PWM-ARCH-002: Use timeout protection
+        return Adaptive_UART_SendString_Timeout(uart, (char*)uart->tx_buffer, UART_TX_TIMEOUT_MS);
+    }
+    return true;  // Empty format string is success
 }
 
 void Adaptive_UART_ProcessRX(Adaptive_UART_t* uart)

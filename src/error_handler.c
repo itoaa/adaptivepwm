@@ -1,6 +1,10 @@
 /**
  * @file error_handler.c
  * @brief Error handler implementation with WD-refresh protection
+ * 
+ * SECURITY UPDATE 2026-04-16: PWM-ARCH-001
+ * - Added FreeRTOS stack overflow hook (RTOS-002 MAJOR finding)
+ * - Integrated with fault history logging
  */
 
 #include "error_handler.h"
@@ -10,6 +14,11 @@
 #include "adaptive_assert.h"
 #include <string.h>
 #include <stdio.h>
+
+// Include fault history for stack overflow logging
+#ifdef USE_FREERTOS
+  #include "fault_history.h"
+#endif
 
 extern Adaptive_PWM_t pwm_handle;
 
@@ -173,3 +182,41 @@ uint16_t Error_GetLog(const ErrorManager_t* manager, char* buffer, uint16_t size
     
     return written;
 }
+
+/* ============================================================================
+ * FREERTOS STACK OVERFLOW HOOK
+ * ============================================================================
+ * SECURITY FIX PWM-ARCH-001 (RTOS-002 MAJOR finding)
+ * 
+ * FreeRTOS requires this hook function when configCHECK_FOR_STACK_OVERFLOW
+ * is enabled. It is called when a stack overflow is detected.
+ * 
+ * This function is called from the RTOS kernel (typically from the tick ISR
+ * or context switch). Due to ISR context, we minimize operations and
+ * defer complex handling to the fault history system which is ISR-safe.
+ * ============================================================================ */
+
+#ifdef USE_FREERTOS
+
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+{
+    (void)xTask;  // Task handle available if needed
+    
+    // Log to fault history if available (ISR-safe)
+    FaultHistory_Log(FAULT_TYPE_SOFTWARE_FAULT, FAULT_SEVERITY_FATAL,
+                     ERR_STACK_OVERFLOW, 0);
+    
+    // Call critical error handler - this halts the system
+    // We pass the task name as the message for debugging
+    // Note: pcTaskName may be truncated to 16 chars by FreeRTOS
+    extern ErrorManager_t error_manager;
+    Error_Critical(&error_manager, ERR_STACK_OVERFLOW, 
+                   pcTaskName ? pcTaskName : "unknown");
+    
+    // Should never reach here - Error_Critical halts
+    while (1) {
+        // Infinite loop as fail-safe
+    }
+}
+
+#endif /* USE_FREERTOS */

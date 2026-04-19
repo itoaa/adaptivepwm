@@ -4,6 +4,8 @@
  * 
  * Security Task: PWM-ARCH-004
  * Includes diagnostic commands for Enhanced Safety System
+ * Performance Task: PWM-ARCH-009
+ * Added profile command for performance profiling
  */
 
 #ifndef CLI_COMMANDS_H
@@ -81,5 +83,8 @@ bool cmd_diagnostic(Adaptive_UART_t* uart, int argc, const char* argv[]);
 bool cmd_safety(Adaptive_UART_t* uart, int argc, const char* argv[]);
 bool cmd_recovery(Adaptive_UART_t* uart, int argc, const char* argv[]);
 bool cmd_maintenance(Adaptive_UART_t* uart, int argc, const char* argv[]);
+
+// Performance profiling command (PWM-ARCH-009)
+bool cmd_profile(Adaptive_UART_t* uart, int argc, const char* argv[]);
 
 #endif // CLI_COMMANDS_H

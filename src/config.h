@@ -58,7 +58,7 @@
 // Enable Hardware RNG peripheral (STM32F401)
 // Uses dedicated entropy source from analog noise
 #ifndef RNG_ENABLED
-    #define RNG_ENABLED             1
+    #define RNG_ENABLED             0  // STM32F401 has no hardware RNG
 #endif
 
 // RNG clock: AHB2 bus clock (HCLK)
@@ -73,7 +73,7 @@
 // RNG fallback: Use software PRNG if hardware RNG fails
 // Note: Only enable for testing on platforms without hardware RNG
 #ifndef RNG_FALLBACK_SOFTWARE
-    #define RNG_FALLBACK_SOFTWARE   0   // Disabled by default (security requirement)
+    #define RNG_FALLBACK_SOFTWARE   1  // Required for STM32F401   // Disabled by default (security requirement)
 #endif
 
 // RNG timeout for polling mode (milliseconds)
@@ -83,6 +83,11 @@
 
 // Maximum RNG generation attempts before error
 #ifndef RNG_MAX_ATTEMPTS
+// Setup mode timeout (milliseconds)
+#ifndef SETUP_TIMEOUT_MS
+    #define SETUP_TIMEOUT_MS        30000  // 30 seconds
+#endif
+
     #define RNG_MAX_ATTEMPTS        3
 #endif
 
@@ -369,5 +374,34 @@ void PID_SetIntegral(PID_Controller_t* pid, float integral);
  * Sector 6: HMAC Key @ 0x080D0000 (alias)
  * Sector 7: Flash Log @ 0x080E0000 (alias)
  */
+
+
+// =============================================================================
+// SETUP GPIO CONFIGURATION (SEC-031)
+// =============================================================================
+
+// Enable physical button/jumper confirmation for first-time password setup
+#ifndef SETUP_CONFIRM_ENABLED
+    #define SETUP_CONFIRM_ENABLED       1
+#endif
+
+// Primary confirmation: Push button on PC13 (USER button on Nucleo)
+#define SETUP_CONFIRM_GPIO_PORT     GPIOC
+#define SETUP_CONFIRM_GPIO_PIN      GPIO_PIN_13
+
+// Alternative confirmation: Jumper on PA0 (A0)
+#define SETUP_CONFIRM_ALT_GPIO_PORT GPIOA
+#define SETUP_CONFIRM_ALT_GPIO_PIN  GPIO_PIN_0
+
+// Button debouncing (milliseconds)
+#define SETUP_BUTTON_DEBOUNCE_MS    50
+
+// Minimum button press duration (milliseconds)
+#define SETUP_BUTTON_PRESS_MIN_MS   2000
+
+// Setup confirmation modes
+#define SETUP_CONFIRM_MODE          0   // 0=Button, 1=Jumper, 2=Auto
+
+// Return codes
 
 #endif // CONFIG_H

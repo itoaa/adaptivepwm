@@ -9,9 +9,11 @@
  * - Dual filtering: IIR + Moving average
  * - Adaptive sampling rate during transients
  * - Better noise rejection
+ * - Steinhart-Hart temperature calculation for NTC thermistors
+ * - Fixed moving average synchronization
  * 
- * @version 2.2.1
- * @date 2026-04-10
+ * @version 2.3.0
+ * @date 2026-04-16
  */
 
 #include "hal_adc.h"
@@ -25,12 +27,13 @@ static void ADC_GPIO_Init(void);
 static void ADC_DMA_Init(Adaptive_ADC_t* adc);
 static float ConvertToVoltage(uint16_t adc_value);
 static float ConvertToCurrent(uint16_t adc_value);
-static float ConvertToTemp(uint16_t adc_value);
+static float ConvertToTemp_Linear(uint16_t adc_value);
+static float ConvertToTemp_Steinhart(uint16_t adc_value);
 
 // Static flag for interrupt handler
 static volatile bool adc_dma_complete = false;
 
-// Moving average buffer
+// Moving average buffer - PWM-ARCH-003: Fixed synchronization
 #if ADC_FILTER_MOVING_AVG_ENABLED
 static float moving_avg_buffer[ADC_NUM_CHANNELS][ADC_FILTER_MOVING_AVG_SIZE];
 static uint8_t moving_avg_index = 0;
@@ -128,6 +131,7 @@ bool Adaptive_ADC_Init(Adaptive_ADC_t* adc)
     // Initialize moving average buffer
 #if ADC_FILTER_MOVING_AVG_ENABLED
     memset(moving_avg_buffer, 0, sizeof(moving_avg_buffer));
+    moving_avg_index = 0;
 #endif
     
     return true;
@@ -172,6 +176,7 @@ static float CalculateMovingAvg(float new_sample, uint8_t channel)
 #endif
 
 // Apply dual filtering (moving average then IIR)
+// PWM-ARCH-003: Fixed - moving average index now updated after all channels processed
 static float ApplyFiltering(float raw, float* filtered, uint8_t channel)
 {
     float result = raw;
@@ -180,13 +185,8 @@ static float ApplyFiltering(float raw, float* filtered, uint8_t channel)
     // First stage: Moving average
     result = CalculateMovingAvg(raw, channel);
     
-    // Update index after all channels processed
-    if (channel == ADC_NUM_CHANNELS - 1) {
-        moving_avg_index++;
-        if (moving_avg_index >= ADC_FILTER_MOVING_AVG_SIZE) {
-            moving_avg_index = 0;
-        }
-    }
+    // PWM-ARCH-003 FIX: Index update moved to Adaptive_ADC_ProcessBuffer()
+    // after ALL channels have been processed
 #endif
     
 #if ADC_FILTER_IIR_ENABLED
@@ -215,12 +215,57 @@ static float ConvertToCurrent(uint16_t adc_value)
     return ((voltage / CURRENT_SENSE_OHMS) * current_gain) + current_offset;
 }
 
-static float ConvertToTemp(uint16_t adc_value)
+// PWM-ARCH-003: Legacy linear conversion (kept for backward compatibility)
+static float ConvertToTemp_Linear(uint16_t adc_value)
 {
     float voltage = (adc_value / ADC_RESOLUTION) * ADC_VREF_MV;
     // Simplified: assuming linear NTC for now
     // Real implementation should use Steinhart-Hart or lookup table
     return (voltage - TEMP_OFFSET_MV) / TEMP_COEFF_MV_PER_C + 25.0f;
+}
+
+// PWM-ARCH-003: Steinhart-Hart temperature calculation for NTC thermistors
+// Uses B-parameter equation for accurate temperature measurement
+static float ConvertToTemp_Steinhart(uint16_t adc_value)
+{
+    // Constants for typical 10k NTC (B=3950)
+    const float R_SERIES = 10000.0f;      // 10k pull-up resistor
+    const float R_NOMINAL = 10000.0f;     // 10k @ 25C
+    const float B_COEFF = 3950.0f;        // Beta value (from NTC datasheet)
+    const float TEMP_NOMINAL_K = 298.15f; // 25C in Kelvin
+    
+    // Convert ADC value to voltage
+    float adc_voltage = (adc_value / ADC_RESOLUTION) * ADC_VREF_MV;
+    
+    // Convert voltage to resistance using voltage divider formula
+    // V_ntc = Vcc * R_ntc / (R_series + R_ntc)
+    // R_ntc = R_series * V_ntc / (Vcc - V_ntc)
+    float resistance = R_SERIES * adc_voltage / (ADC_VREF_MV - adc_voltage);
+    
+    // Handle edge cases
+    if (resistance <= 0.0f) {
+        return -273.15f; // Absolute zero (error condition)
+    }
+    if (resistance > 10e6f) {
+        return 150.0f; // Very hot (saturation)
+    }
+    
+    // Steinhart-Hart simplified using B-parameter equation
+    // 1/T = 1/T0 + (1/B) * ln(R/R0)
+    float steinhart = resistance / R_NOMINAL;
+    steinhart = logf(steinhart);
+    steinhart /= B_COEFF;
+    steinhart += 1.0f / TEMP_NOMINAL_K;
+    steinhart = 1.0f / steinhart;
+    
+    // Return temperature in Celsius
+    float temp_celsius = steinhart - 273.15f;
+    
+    // Clamp to reasonable range
+    if (temp_celsius < -40.0f) temp_celsius = -40.0f;
+    if (temp_celsius > 150.0f) temp_celsius = 150.0f;
+    
+    return temp_celsius;
 }
 
 // Check for transient condition
@@ -249,6 +294,7 @@ static bool DetectTransient(Adaptive_ADC_t* adc, float new_vin, float new_vout, 
            (delta_current > ADC_TRANSIENT_THRESHOLD);
 }
 
+// PWM-ARCH-003: Process buffer with fixed moving average synchronization
 void Adaptive_ADC_ProcessBuffer(Adaptive_ADC_t* adc)
 {
     ADAPTIVE_ASSERT(adc != NULL);
@@ -270,7 +316,9 @@ void Adaptive_ADC_ProcessBuffer(Adaptive_ADC_t* adc)
     float raw_vin = ConvertToVoltage(sum_vin / samples);
     float raw_vout = ConvertToVoltage(sum_vout / samples);
     float raw_current = ConvertToCurrent(sum_current / samples);
-    float raw_temp = ConvertToTemp(sum_temp / samples);
+    
+    // PWM-ARCH-003: Use Steinhart-Hart for accurate temperature
+    float raw_temp = ConvertToTemp_Steinhart(sum_temp / samples);
     
     // Apply dual-stage filtering
     adc->current.vin = ApplyFiltering(raw_vin, &adc->current.vin, 0);
@@ -279,6 +327,12 @@ void Adaptive_ADC_ProcessBuffer(Adaptive_ADC_t* adc)
     adc->current.temperature = ApplyFiltering(raw_temp, &adc->current.temperature, 3);
     adc->current.timestamp = HAL_GetTick();
     adc->current.valid = true;
+    
+    // PWM-ARCH-003 FIX: Update moving average index AFTER all channels processed
+    // This ensures synchronization across all channels
+#if ADC_FILTER_MOVING_AVG_ENABLED
+    moving_avg_index = (moving_avg_index + 1) % ADC_FILTER_MOVING_AVG_SIZE;
+#endif
     
     // Update averaged values (IIR filter for display/logging)
     adc->averaged.vin += ADC_FILTER_IIR_ALPHA * (adc->current.vin - adc->averaged.vin);

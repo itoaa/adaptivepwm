@@ -3,14 +3,19 @@
  * @brief UART CLI Authentication Module
  * @details Implements password/PIN authentication for UART CLI access
  *          with secure storage, lockout protection, and configurable timeouts.
+ *          Includes physical confirmation for first-time setup (SEC-031).
  * 
  * Security Framework:
  * - CISSP Domain: 4 (Communication and Network Security) / 5 (IAM)
  * - NIST: PR.AC-01 (Protect - Access Control)
  * - ISO 27001: 8.5 (Secure authentication)
  * 
- * @version 1.0.0
- * @date 2026-04-12
+ * Security Assessment Reference:
+ * - Finding: ADP-IAM-001 (CVSS 5.3 - MEDIUM)
+ * - Task: SEC-031
+ * 
+ * @version 1.2.0
+ * @date 2026-04-16
  */
 
 #ifndef CLI_AUTH_H
@@ -18,13 +23,24 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "config.h"      // Include config first for CLI_AUTH_HASH_ITERATIONS
 #include "hal_uart.h"
+
+// =============================================================================
+// VERSION
+// =============================================================================
+#define CLI_AUTH_VERSION_MAJOR      1
+#define CLI_AUTH_VERSION_MINOR      2
+#define CLI_AUTH_VERSION_PATCH      0
 
 // =============================================================================
 // CONFIGURATION
 // =============================================================================
 
-// Authentication settings (configurable via build flags)
+// Authentication settings (configurable via build flags or config.h)
+// CLI_AUTH_HASH_ITERATIONS is now defined in config.h (SEC-027)
+// Default: 100000 (NIST SP 800-132 compliant, increased from 1000)
+
 #ifndef CLI_AUTH_ENABLED
     #define CLI_AUTH_ENABLED          1
 #endif
@@ -45,8 +61,14 @@
     #define CLI_AUTH_PASSWORD_MAX_LEN    32
 #endif
 
-#ifndef CLI_AUTH_HASH_ITERATIONS
-    #define CLI_AUTH_HASH_ITERATIONS     1000  // PBKDF2 iterations
+// Note: CLI_AUTH_HASH_ITERATIONS is defined in config.h
+// Compile-time check to ensure minimum security requirements
+#if !defined(CLI_AUTH_HASH_ITERATIONS)
+    #error "CLI_AUTH_HASH_ITERATIONS must be defined in config.h"
+#endif
+
+#if CLI_AUTH_HASH_ITERATIONS < 100000
+    #warning "CLI_AUTH_HASH_ITERATIONS below NIST SP 800-132 recommended minimum of 100,000"
 #endif
 
 // Salt size for password hashing
@@ -80,7 +102,9 @@ typedef enum {
     AUTH_STORAGE_ERROR,
     AUTH_INVALID_LENGTH,
     AUTH_SAME_PASSWORD,
-    AUTH_WEAK_PASSWORD
+    AUTH_WEAK_PASSWORD,
+    AUTH_SETUP_CONFIRMATION_REQUIRED,  // SEC-031: Physical confirmation needed
+    AUTH_SETUP_CONFIRMATION_TIMEOUT    // SEC-031: Physical confirmation timeout
 } auth_result_t;
 
 /**
@@ -93,6 +117,7 @@ typedef struct {
     uint32_t last_auth_time;     // Timestamp of last successful auth
     uint32_t session_timeout_s;  // Session timeout in seconds
     bool password_set;             // Has password been configured
+    bool setup_confirmed;          // SEC-031: Physical confirmation received
 } cli_auth_context_t;
 
 /**
@@ -140,8 +165,18 @@ bool CLI_Auth_IsAuthenticated(void);
  * @param password Password string
  * @return Authentication result code
  * @security Lockout enforced after CLI_AUTH_MAX_ATTEMPTS failed attempts
+ * @note For first-time setup, requires physical confirmation (SEC-031)
  */
 auth_result_t CLI_Auth_Login(const char* password);
+
+/**
+ * @brief Authenticate with password and optional UART for messages
+ * @param password Password string
+ * @param uart UART handle for status messages (can be NULL)
+ * @return Authentication result code
+ * @note SEC-031: Shows physical confirmation instructions if needed
+ */
+auth_result_t CLI_Auth_LoginWithUART(const char* password, Adaptive_UART_t* uart);
 
 /**
  * @brief Logout current session
@@ -155,6 +190,7 @@ bool CLI_Auth_Logout(void);
  * @param new_password New password to set
  * @return Authentication result code
  * @security Password must meet minimum length requirements
+ * @note For first-time setup, requires physical confirmation (SEC-031)
  */
 auth_result_t CLI_Auth_SetPassword(const char* old_password, const char* new_password);
 
@@ -163,6 +199,21 @@ auth_result_t CLI_Auth_SetPassword(const char* old_password, const char* new_pas
  * @return true if password has been configured
  */
 bool CLI_Auth_IsPasswordSet(void);
+
+/**
+ * @brief Check if setup confirmation is required
+ * @return true if physical confirmation needed for first-time setup
+ * @security SEC-031: Prevents remote password setting
+ */
+bool CLI_Auth_IsSetupConfirmationRequired(void);
+
+/**
+ * @brief Request setup confirmation from user
+ * @param uart UART handle for status messages
+ * @return true if confirmation received, false if timeout/error
+ * @security SEC-031: Waits for GPIO button press or jumper
+ */
+bool CLI_Auth_RequestSetupConfirmation(Adaptive_UART_t* uart);
 
 /**
  * @brief Get remaining lockout time in seconds

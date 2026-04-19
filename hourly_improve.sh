@@ -2,7 +2,7 @@
 # AdaptivePWM Hourly Improvement Script
 # Runs every hour to incrementally improve the project
 
-WORKSPACE="/home/ola/.openclaw/workspace/AdaptivePWM"
+WORKSPACE="/home/ola/.openclaw/workspace/projects/AdaptivePWM"
 LOGFILE="/home/ola/.openclaw/workspace/logs/adaptivepwm_hourly.log"
 PIDFILE="/tmp/adaptivepwm_hourly.pid"
 

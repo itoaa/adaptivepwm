@@ -1,0 +1,161 @@
+# ============================================================================
+# MISRA-C:2012 Configuration for AdaptivePWM
+# ============================================================================
+# This file configures MISRA-C:2012 rule checking for the AdaptivePWM project.
+# 
+# Usage:
+#   cppcheck --addon=misra --addon-args="--config-file=ci/misra-config.txt" src/
+#
+# Reference: MISRA-C:2012 Guidelines for the use of the C language in
+#            critical systems (Third Edition, First Revision)
+# ============================================================================
+
+# ============================================================================
+# REQUIRED RULES - These MUST be followed
+# ============================================================================
+
+# --- Directive 4.1: Run-time failures ---
+# The MISRA-C working group notes that cppcheck cannot fully verify all run-time
+# failures, so this is advisory only.
+
+# --- Essential Types (Rules 10.x) ---
+# Operands shall not be of inappropriate essential type
+rule-required: 10.1
+# Expressions of character type shall not be used inappropriately
+rule-required: 10.2
+# The value of an expression shall not be assigned to an object with a
+# narrower essential type or of a different essential type category
+rule-required: 10.3
+# Both operands of an operator shall have the same essential type category
+rule-required: 10.4
+
+# --- Conversions (Rules 11.x) ---
+# Conversions shall not be performed between pointer to object types
+# where the types are not compatible
+rule-required: 11.3
+# A pointer should not point to an incomplete type
+rule-required: 11.4
+# A conversion should not be performed from pointer to void into pointer to object
+rule-required: 11.5
+# Cast from pointer to pointer
+rule-required: 11.6
+
+# --- Control Flow (Rules 14.x) ---
+# The goto statement shall not be used
+rule-required: 14.4
+# The continue statement shall not be used
+rule-required: 14.5
+# The break statement shall be used only in a switch statement
+rule-required: 14.6
+# A function shall have a single point of exit at the end of the function
+rule-required: 15.5
+
+# --- Functions (Rules 17.x) ---
+# The value returned by a function having non-void return type shall be used
+rule-required: 17.7
+# A function parameter should not be modified
+rule-required: 17.8
+# The value passed to a function parameter with const qualifier shall have
+# essentially the same type as the parameter
+rule-required: 17.6
+
+# --- Arrays (Rules 18.x) ---
+# A pointer resulting from arithmetic on pointer operands shall address an element
+# within the bounds of the same array
+rule-required: 18.1
+# The address of an object with automatic storage shall not be copied to another
+# object that persists after the first object has ceased to exist
+rule-required: 18.6
+
+# --- Dynamic Memory (Rules 21.x) ---
+# Dynamic memory allocation shall not be used
+rule-required: 21.3
+
+# ============================================================================
+# ADVISORY RULES - These SHOULD be followed, deviations require documentation
+# ============================================================================
+
+# --- Language Features ---
+# Octal constants shall not be used
+rule-advisory: 7.1
+# The comma operator shall not be used
+rule-advisory: 12.3
+
+# --- Types ---
+# The appropriate type for bit fields shall be used
+rule-advisory: 6.5
+
+# --- Expressions ---
+# Array indexing shall be the only allowed form of pointer arithmetic
+rule-advisory: 18.4
+
+# ============================================================================
+# DEVIATIONS - Rules that we consciously deviate from with justification
+# ============================================================================
+
+# --- Rule 11.1: Conversion of function pointer ---
+# STATUS: Deviation Required
+# JUSTIFICATION: 
+#   HAL function pointers are used for callbacks in STM32 HAL library.
+#   This is standard practice for HAL-based embedded systems.
+# MITIGATION: All function pointer conversions are through HAL abstraction.
+#rule-deviation: 11.1
+
+# --- Rule 11.2: Cast pointer to different type ---
+# STATUS: Deviation Required for HAL
+# JUSTIFICATION:
+#   HAL_GPIO_Init and similar functions require GPIO_TypeDef* casts.
+#   These are vendor-provided APIs outside project control.
+# MITIGATION: Wrapped in HAL abstraction layer.
+#rule-deviation: 11.2
+
+# --- Rule 14.4: goto statement ---
+# STATUS: No deviation - goto not used in project code
+# Halts are implemented via while(1) loops, not goto.
+
+# --- Rule 15.5: Single exit point ---
+# STATUS: Partial Deviation
+# JUSTIFICATION:
+#   Early returns are used for parameter validation and error handling.
+#   This is a defensive coding pattern that reduces nesting depth.
+# MITIGATION: All error paths documented; guard clauses are consistent.
+#   Functions using early returns have < 3 exit points maximum.
+#rule-deviation: 15.5
+
+# --- Rule 17.7: Return value not used ---
+# STATUS: Partial Deviation for HAL functions
+# JUSTIFICATION:
+#   Some HAL function return values are intentionally unused in non-critical
+#   paths (e.g., debug output).
+# MITIGATION: All critical HAL calls check return values. Deviations
+#   marked with /* MISRA deviated: intentional */ comments.
+#rule-deviation: 17.7
+
+# --- Rule 21.3: Dynamic memory ---
+# STATUS: No deviation - malloc/calloc/realloc/free not used
+# All memory is statically allocated or stack-based.
+
+# ============================================================================
+# IMPLEMENTATION NOTES
+# ============================================================================
+#
+# 1. File Organization:
+#    - ci/misra-config.txt      - This file
+#    - ci/misra-suppressions.txt - Specific line suppressions
+#    - docs/MISRA_COMPLIANCE.md - Full compliance report
+#
+# 2. Checking MISRA Compliance:
+#    make misra-check           - Run MISRA analysis
+#    make misra-report          - Generate detailed report
+#
+# 3. Adding Deviations:
+#    - Update this file with rule-deviation entry
+#    - Document justification in MISRA_COMPLIANCE.md
+#    - Mark in code with /* MISRA RULE-XX-Y: <justification> */
+#
+# 4. Tool Limitations:
+#    Cppcheck's MISRA addon covers most but not all MISRA-C:2012 rules.
+#    For full compliance certification, consider PC-lint Plus or 
+#    Coverity MISRA checker.
+#
+# ============================================================================

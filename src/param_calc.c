@@ -1,6 +1,12 @@
 /**
  * @file param_calc.c
  * @brief Electrical parameter calculation implementation with RMS
+ * 
+ * PWM-ARCH-003: Added DCM (Discontinuous Conduction Mode) detection
+ * and improved conduction mode analysis.
+ * 
+ * @version 2.3.0
+ * @date 2026-04-16
  */
 
 #include "param_calc.h"
@@ -81,13 +87,19 @@ static float CalcRMS(const float* samples, uint16_t count)
     return sqrtf(sum_sq / count);
 }
 
+// PWM-ARCH-003: Helper to get sample count
+static uint16_t GetSampleCount(const WaveformBuffer_t* buffer)
+{
+    return buffer->buffer_full ? RIPPLE_BUFFER_SIZE : buffer->write_index;
+}
+
 float ParamCalc_CalcRippleCurrent(const WaveformBuffer_t* buffer)
 {
     ADAPTIVE_ASSERT(buffer != NULL);
     
     if (buffer == NULL) return 0.0f;
     
-    uint16_t count = buffer->buffer_full ? RIPPLE_BUFFER_SIZE : buffer->write_index;
+    uint16_t count = GetSampleCount(buffer);
     if (count < MIN_SAMPLES_FOR_CALC) return 0.0f;
     
     // RMS gives more accurate ripple than peak-to-peak
@@ -100,10 +112,87 @@ float ParamCalc_CalcRippleVoltage(const WaveformBuffer_t* buffer)
     
     if (buffer == NULL) return 0.0f;
     
-    uint16_t count = buffer->buffer_full ? RIPPLE_BUFFER_SIZE : buffer->write_index;
+    uint16_t count = GetSampleCount(buffer);
     if (count < MIN_SAMPLES_FOR_CALC) return 0.0f;
     
     return CalcRMS(buffer->vout_samples, count) * 2.0f * 1.414f;
+}
+
+// PWM-ARCH-003: Get minimum current from buffer
+float ParamCalc_GetMinCurrent(const WaveformBuffer_t* buffer)
+{
+    ADAPTIVE_ASSERT(buffer != NULL);
+    
+    if (buffer == NULL) return 0.0f;
+    
+    uint16_t count = GetSampleCount(buffer);
+    if (count == 0) return 0.0f;
+    
+    float min_current = INFINITY;
+    for (uint16_t i = 0; i < count; i++) {
+        if (buffer->current_samples[i] < min_current) {
+            min_current = buffer->current_samples[i];
+        }
+    }
+    
+    return min_current;
+}
+
+// PWM-ARCH-003: Get maximum current from buffer
+float ParamCalc_GetMaxCurrent(const WaveformBuffer_t* buffer)
+{
+    ADAPTIVE_ASSERT(buffer != NULL);
+    
+    if (buffer == NULL) return 0.0f;
+    
+    uint16_t count = GetSampleCount(buffer);
+    if (count == 0) return 0.0f;
+    
+    float max_current = -INFINITY;
+    for (uint16_t i = 0; i < count; i++) {
+        if (buffer->current_samples[i] > max_current) {
+            max_current = buffer->current_samples[i];
+        }
+    }
+    
+    return max_current;
+}
+
+// PWM-ARCH-003: Detect conduction mode (DCM vs CCM)
+// Returns true if DCM detected (current touches zero)
+bool ParamCalc_DetectConductionMode(const WaveformBuffer_t* buffer)
+{
+    ADAPTIVE_ASSERT(buffer != NULL);
+    
+    if (buffer == NULL) return false;
+    
+    uint16_t count = GetSampleCount(buffer);
+    if (count < MIN_SAMPLES_FOR_CALC) return false;
+    
+    // Get average current
+    float avg_current = 0.0f;
+    for (uint16_t i = 0; i < count; i++) {
+        avg_current += buffer->current_samples[i];
+    }
+    avg_current /= count;
+    
+    // If average current is very low, likely in DCM
+    if (avg_current < 0.05f) {
+        return true;
+    }
+    
+    // Count samples near zero (DCM indicator)
+    uint16_t near_zero_count = 0;
+    for (uint16_t i = 0; i < count; i++) {
+        if (buffer->current_samples[i] < DCM_CURRENT_THRESHOLD_A) {
+            near_zero_count++;
+        }
+    }
+    
+    // DCM if more than threshold ratio of samples near zero
+    float near_zero_ratio = (float)near_zero_count / (float)count;
+    
+    return (near_zero_ratio > DCM_MIN_SAMPLES_RATIO);
 }
 
 float ParamCalc_CalculateL(const WaveformBuffer_t* buffer, float duty_cycle, float fsw)
@@ -121,7 +210,7 @@ float ParamCalc_CalculateL(const WaveformBuffer_t* buffer, float duty_cycle, flo
     
     // Get average Vin and Vout from buffer
     float avg_vin = 0, avg_vout = 0;
-    uint16_t count = buffer->buffer_full ? RIPPLE_BUFFER_SIZE : buffer->write_index;
+    uint16_t count = GetSampleCount(buffer);
     
     for (uint16_t i = 0; i < count; i++) {
         avg_vin += buffer->vin_samples[i];
@@ -130,11 +219,26 @@ float ParamCalc_CalculateL(const WaveformBuffer_t* buffer, float duty_cycle, flo
     avg_vin /= count;
     avg_vout /= count;
     
+    // PWM-ARCH-003: Adjust calculation for DCM if detected
+    // In DCM, ripple current calculation is different
+    bool dcm = ParamCalc_DetectConductionMode(buffer);
+    
     // L = (Vin - Vout) * D / (fsw * ΔI)
     float voltage_diff = fabsf(avg_vin - avg_vout);
     float ton = duty_cycle / fsw;
     
-    float inductance = (voltage_diff * ton) / ripple_current;
+    float inductance;
+    if (dcm) {
+        // DCM: Use modified formula
+        // In DCM, ΔI = I_peak (since current starts from zero)
+        // L = 2 * (Vin - Vout) * D / (fsw * ΔI_peak)
+        float i_peak = ParamCalc_GetMaxCurrent(buffer);
+        if (i_peak < 0.001f) return 0.0f;
+        inductance = 2.0f * voltage_diff * ton / (fsw * i_peak);
+    } else {
+        // CCM: Standard formula
+        inductance = (voltage_diff * ton) / ripple_current;
+    }
     
     // Convert to mH
     return inductance * 1000.0f;
@@ -155,9 +259,18 @@ float ParamCalc_CalculateC(const WaveformBuffer_t* buffer, float duty_cycle, flo
     
     if (ripple_voltage < 0.001f || ripple_current < 0.001f) return 0.0f;
     
-    // C = ΔI / (8 * fsw * ΔV) for buck converter
-    // Using RMS-based calculation
-    float capacitance = (ripple_current * duty_cycle) / (8.0f * fsw * ripple_voltage);
+    // PWM-ARCH-003: Adjust for conduction mode
+    bool dcm = ParamCalc_DetectConductionMode(buffer);
+    float capacitance;
+    
+    if (dcm) {
+        // DCM: C = ΔI / (fsw * ΔV) * k (where k is a factor accounting for DCM)
+        // Simplified: similar formula but different constant
+        capacitance = (ripple_current * duty_cycle) / (4.0f * fsw * ripple_voltage);
+    } else {
+        // CCM: C = ΔI / (8 * fsw * ΔV) for buck converter
+        capacitance = (ripple_current * duty_cycle) / (8.0f * fsw * ripple_voltage);
+    }
     
     // Convert to uF
     return capacitance * 1000000.0f;
@@ -177,9 +290,14 @@ float ParamCalc_CalculateESR(const WaveformBuffer_t* buffer)
     
     if (ripple_current < 0.001f) return 0.0f;
     
+    // PWM-ARCH-003: Adjust ESR estimate based on conduction mode
+    // In DCM, the ESR contribution is more pronounced
+    bool dcm = ParamCalc_DetectConductionMode(buffer);
+    float esr_contribution = dcm ? 0.5f : 0.3f;  // Higher contribution in DCM
+    
     // Estimate ESR component of voltage ripple
     // Capacitive reactance reduces at higher frequencies
-    float esr_voltage = ripple_voltage * 0.3f;  // Estimate ESR contribution
+    float esr_voltage = ripple_voltage * esr_contribution;
     
     float esr = esr_voltage / ripple_current;
     
@@ -193,7 +311,7 @@ float ParamCalc_DetectFrequency(const WaveformBuffer_t* buffer)
     
     if (buffer == NULL) return 0.0f;
     
-    uint16_t count = buffer->buffer_full ? RIPPLE_BUFFER_SIZE : buffer->write_index;
+    uint16_t count = GetSampleCount(buffer);
     if (count < 4) return 0.0f;
     
     // Count zero crossings in current waveform
@@ -236,12 +354,15 @@ bool ParamCalc_CalculateAll(const WaveformBuffer_t* buffer,
     
     memset(params, 0, sizeof(CalculatedParams_t));
     
-    uint16_t count = buffer->buffer_full ? RIPPLE_BUFFER_SIZE : buffer->write_index;
+    uint16_t count = GetSampleCount(buffer);
     if (count < MIN_SAMPLES_FOR_CALC) return false;
     
     params->ripple_current = ParamCalc_CalcRippleCurrent(buffer);
     params->ripple_voltage = ParamCalc_CalcRippleVoltage(buffer);
     params->switching_freq = ParamCalc_DetectFrequency(buffer);
+    
+    // PWM-ARCH-003: Detect conduction mode
+    params->dcm_detected = ParamCalc_DetectConductionMode(buffer);
     
     params->inductance_mH = ParamCalc_CalculateL(buffer, duty_cycle, fsw);
     params->capacitance_uF = ParamCalc_CalculateC(buffer, duty_cycle, fsw);

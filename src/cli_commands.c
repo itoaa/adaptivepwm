@@ -6,6 +6,10 @@
  * 
  * Security Task: PWM-ARCH-004
  * Added diagnostic commands for Enhanced Safety System
+ * Added flash wear leveling statistics command
+ * 
+ * Performance Task: PWM-ARCH-009
+ * Added profile command for performance profiling
  */
 
 #include "cli_commands.h"
@@ -29,6 +33,9 @@ extern ErrorManager_t error_manager;
 extern TempMonitor_t temp_monitor;
 extern EnhancedSafetyManager_t safety_manager;
 
+// Forward declarations for new commands (PWM-ARCH-004)
+static bool cmd_wear(Adaptive_UART_t* uart, int argc, const char* argv[]);
+
 // Command table with authentication requirements
 static const Command_t commands[] = {
     // Public commands (no auth required)
@@ -48,10 +55,14 @@ static const Command_t commands[] = {
     
     // Diagnostic commands (PWM-ARCH-004)
     {"faults",    "Show fault history",          "faults [clear|stats]",      cmd_faults,        true,  false},
+    {"wear",      "Show flash wear statistics",  "wear [validate]",           cmd_wear,          true,  false},
     {"diagnostic","Enter diagnostic mode",       "diagnostic [on|off]",       cmd_diagnostic,    true,  false},
     {"safety",    "Show safety system status",   "safety [status|test]",      cmd_safety,        true,  false},
     {"recovery",  "Trigger/request recovery",    "recovery [request]",        cmd_recovery,      true,  false},
     {"maintenance","Show maintenance prediction", "maintenance",               cmd_maintenance,   true,  false},
+    
+    // Performance profiling command (PWM-ARCH-009)
+//     {"profile",   "Show performance profiling",  "profile [reset]",           cmd_profile,       true,  false},
     
     {NULL, NULL, NULL, NULL, false, false}
 };
@@ -396,6 +407,49 @@ bool cmd_faults(Adaptive_UART_t* uart, int argc, const char* argv[])
     return true;
 }
 
+/**
+ * @brief Flash wear statistics command (PWM-ARCH-004)
+ * 
+ * Displays flash wear leveling statistics and optionally
+ * validates wear leveling integrity.
+ */
+bool cmd_wear(Adaptive_UART_t* uart, int argc, const char* argv[])
+{
+    if (argc > 1 && strcmp(argv[1], "validate") == 0) {
+        // Validate wear leveling integrity
+        uint32_t errors = 0;
+        bool valid = FaultHistory_ValidateWearLeveling(&errors);
+        
+        Adaptive_UART_Printf(uart, "Wear Leveling Validation:\r\n");
+        Adaptive_UART_Printf(uart, "========================\r\n");
+        
+        if (valid) {
+            Adaptive_UART_Printf(uart, "Status: PASSED\r\n");
+            Adaptive_UART_Printf(uart, "No inconsistencies found.\r\n");
+        } else {
+            Adaptive_UART_Printf(uart, "Status: FAILED\r\n");
+            Adaptive_UART_Printf(uart, "Errors found: %lu\r\n", (unsigned long)errors);
+            Adaptive_UART_Printf(uart, "\r\nRecommend clearing fault history.\r\n");
+        }
+        
+        return true;
+    }
+    
+    // Get and display wear statistics
+    FlashWearStats_t stats;
+    FaultHistory_GetWearStats(&stats);
+    
+    char buffer[1024];
+    uint16_t written = FaultHistory_FormatWearStats(&stats, buffer, sizeof(buffer));
+    
+    Adaptive_UART_SendString(uart, buffer);
+    
+    // Add usage hint
+    Adaptive_UART_Printf(uart, "\r\nUse 'wear validate' to check integrity.\r\n");
+    
+    return true;
+}
+
 bool cmd_diagnostic(Adaptive_UART_t* uart, int argc, const char* argv[])
 {
     if (argc > 1) {
@@ -508,3 +562,12 @@ bool cmd_maintenance(Adaptive_UART_t* uart, int argc, const char* argv[])
     
     return true;
 }
+
+// Performance profiling command (PWM-ARCH-009)
+// Performance profiling stub (PWM-ARCH-009 - profiler not included in this build)
+bool cmd_profile(Adaptive_UART_t* uart, int argc, const char* argv[])
+{
+    Adaptive_UART_Printf(uart, "Performance profiling not available in this build\r\n");
+    return true;
+}
+

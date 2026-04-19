@@ -1,0 +1,98 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "AdaptivePWM",
+  "documentNamespace": "https://github.com/itoaa/AdaptivePWM",
+  "creationInfo": {
+    "created": "2026-04-18T07:00:00Z",
+    "creators": [
+      "Tool: manual-generation",
+      "Organization: OpenClaw"
+    ],
+    "licenseListVersion": "3.20"
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-STM32HAL",
+      "name": "STM32F4xx_HAL_Driver",
+      "versionInfo": "1.7.0",
+      "supplier": "Organization: STMicroelectronics",
+      "downloadLocation": "https://github.com/STMicroelectronics/STM32CubeF4",
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "Copyright (c) 2017 STMicroelectronics",
+      "filesAnalyzed": false
+    },
+    {
+      "SPDXID": "SPDXRef-Package-CMSIS",
+      "name": "CMSIS",
+      "versionInfo": "5.9.0",
+      "supplier": "Organization: ARM",
+      "downloadLocation": "https://github.com/ARM-software/CMSIS_5",
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "Copyright (c) 2009-2022 ARM Ltd",
+      "filesAnalyzed": false
+    },
+    {
+      "SPDXID": "SPDXRef-Package-FreeRTOS",
+      "name": "FreeRTOS-Kernel",
+      "versionInfo": "10.4.6",
+      "supplier": "Organization: Amazon Web Services",
+      "downloadLocation": "https://github.com/FreeRTOS/FreeRTOS-Kernel",
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (C) Amazon Web Services, Inc",
+      "filesAnalyzed": false
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Newlib",
+      "name": "newlib-nano",
+      "versionInfo": "4.1.0",
+      "supplier": "Organization: Red Hat",
+      "downloadLocation": "https://sourceware.org/newlib/",
+      "licenseConcluded": "GPL-2.0-with-exceptions",
+      "licenseDeclared": "GPL-2.0-with-exceptions",
+      "copyrightText": "Copyright (c) Red Hat Inc",
+      "filesAnalyzed": false
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Libopencm3",
+      "name": "libopencm3",
+      "versionInfo": "0.0.1-git",
+      "supplier": "Organization: libopencm3",
+      "downloadLocation": "https://github.com/libopencm3/libopencm3",
+      "licenseConcluded": "LGPL-3.0-or-later",
+      "licenseDeclared": "LGPL-3.0-or-later",
+      "copyrightText": "Copyright (c) 2010 libopencm3 contributors",
+      "filesAnalyzed": false
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relatedSpdxElement": "SPDXRef-Package-STM32HAL",
+      "relationshipType": "DESCRIBES"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relatedSpdxElement": "SPDXRef-Package-CMSIS",
+      "relationshipType": "DESCRIBES"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relatedSpdxElement": "SPDXRef-Package-FreeRTOS",
+      "relationshipType": "DESCRIBES"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relatedSpdxElement": "SPDXRef-Package-Newlib",
+      "relationshipType": "DESCRIBES"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relatedSpdxElement": "SPDXRef-Package-Libopencm3",
+      "relationshipType": "DESCRIBES"
+    }
+  ]
+}
