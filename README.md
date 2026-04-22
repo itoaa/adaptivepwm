@@ -4,14 +4,14 @@
 
 AdaptivePWM is a real-time control system for buck/boost converters and electronic speed controllers (ESCs). It continuously monitors electrical parameters and dynamically adjusts PWM output for optimal efficiency.
 
-**Version:** 2.3.1  
+**Version:** 2.4.0  
 **Target:** STM32F401RE @ 84 MHz  
 **Clock:** 16 MHz HSE → 84 MHz SYSCLK  
 **Framework:** CISSP-Aligned Security Framework
 
 ---
 
-## What's New in v2.3.1
+## What's New in v2.4.0
 
 ### Security Framework (CISSP/NIST Aligned)
 - **SEC-031:** Physical button confirmation for first-time password setup
@@ -260,7 +260,7 @@ pio device monitor -b 115200
 ### Build Status
 - **RAM:** 7.5% (7,344 bytes from 98,304)
 - **Flash:** 9.1% (47,908 bytes from 524,288)
-- **Version:** 2.3.1
+- **Version:** 2.4.0
 
 ---
 
