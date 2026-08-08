@@ -25,9 +25,9 @@
 // Helper function prototypes
 static void ADC_GPIO_Init(void);
 static void ADC_DMA_Init(Adaptive_ADC_t* adc);
-static float ConvertToVoltage(uint16_t adc_value);
+static float ConvertToVin(uint16_t adc_value);
+static float ConvertToVout(uint16_t adc_value);
 static float ConvertToCurrent(uint16_t adc_value);
-static float ConvertToTemp_Linear(uint16_t adc_value);
 static float ConvertToTemp_Steinhart(uint16_t adc_value);
 
 // Static flag for interrupt handler
@@ -199,20 +199,37 @@ static float ApplyFiltering(float raw, float* filtered, uint8_t channel)
     return *filtered;
 }
 
-// ADC calibration values
+// ADC calibration values (multiplicative + offset on scaled engineering units)
 static float vin_gain = 1.0f, vin_offset = 0.0f;
 static float vout_gain = 1.0f, vout_offset = 0.0f;
 static float current_gain = 1.0f, current_offset = 0.0f;
 
-static float ConvertToVoltage(uint16_t adc_value)
+static float AdcToPinVolts(uint16_t adc_value)
 {
-    return ((adc_value / ADC_RESOLUTION) * ADC_VREF_MV / 1000.0f * vin_gain) + vin_offset;
+    return ((float)adc_value / ADC_RESOLUTION) * (ADC_VREF_MV / 1000.0f);
 }
 
+static float ConvertToVin(uint16_t adc_value)
+{
+    float vadc = AdcToPinVolts(adc_value);
+    return (vadc * ADC_VIN_DIVIDER_RATIO * vin_gain) + vin_offset;
+}
+
+static float ConvertToVout(uint16_t adc_value)
+{
+    float vadc = AdcToPinVolts(adc_value);
+    return (vadc * ADC_VOUT_DIVIDER_RATIO * vout_gain) + vout_offset;
+}
+
+/* I = V_sense / (V per amp). Not V/R_shunt alone — that ignored the sense amp. */
 static float ConvertToCurrent(uint16_t adc_value)
 {
-    float voltage = (adc_value / ADC_RESOLUTION) * ADC_VREF_MV / 1000.0f;
-    return ((voltage / CURRENT_SENSE_OHMS) * current_gain) + current_offset;
+    float vadc = AdcToPinVolts(adc_value);
+    float amps = 0.0f;
+    if (ADC_CURRENT_V_PER_AMP > 1e-9f) {
+        amps = vadc / ADC_CURRENT_V_PER_AMP;
+    }
+    return (amps * current_gain) + current_offset;
 }
 
 // PWM-ARCH-003: Legacy linear conversion (kept for backward compatibility)
@@ -312,10 +329,10 @@ void Adaptive_ADC_ProcessBuffer(Adaptive_ADC_t* adc)
         sum_temp += adc->dma_buffer[i + 3];
     }
     
-    // Convert raw averages to physical units
-    float raw_vin = ConvertToVoltage(sum_vin / samples);
-    float raw_vout = ConvertToVoltage(sum_vout / samples);
-    float raw_current = ConvertToCurrent(sum_current / samples);
+    // Convert raw averages to physical units (board scale factors in config.h)
+    float raw_vin = ConvertToVin((uint16_t)(sum_vin / samples));
+    float raw_vout = ConvertToVout((uint16_t)(sum_vout / samples));
+    float raw_current = ConvertToCurrent((uint16_t)(sum_current / samples));
     
     // PWM-ARCH-003: Use Steinhart-Hart for accurate temperature
     float raw_temp = ConvertToTemp_Steinhart(sum_temp / samples);
@@ -430,11 +447,10 @@ uint16_t Adaptive_ADC_GetRaw(const Adaptive_ADC_t* adc, uint8_t channel)
     return adc->dma_buffer[channel];
 }
 
-// ADC DMA Complete Callback
+// ADC DMA Complete Callback — ISR only sets a flag; processing is in the main loop
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 {
-    // This is called from ISR context - be quick!
-    // In full implementation, set flag for task processing
+    (void)hadc;
     adc_dma_complete = true;
 }
 

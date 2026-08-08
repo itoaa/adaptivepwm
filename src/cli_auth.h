@@ -37,38 +37,13 @@
 // CONFIGURATION
 // =============================================================================
 
-// Authentication settings (configurable via build flags or config.h)
-// CLI_AUTH_HASH_ITERATIONS is now defined in config.h (SEC-027)
-// Default: 100000 (NIST SP 800-132 compliant, increased from 1000)
-
-#ifndef CLI_AUTH_ENABLED
-    #define CLI_AUTH_ENABLED          1
+/* Defaults for auth come from config.h / config/features.h (auth OFF by default). */
+#if !defined(CLI_AUTH_ENABLED)
+    #define CLI_AUTH_ENABLED  0
 #endif
 
-#ifndef CLI_AUTH_MAX_ATTEMPTS
-    #define CLI_AUTH_MAX_ATTEMPTS     3
-#endif
-
-#ifndef CLI_AUTH_LOCKOUT_DURATION_S
-    #define CLI_AUTH_LOCKOUT_DURATION_S  300  // 5 minutes
-#endif
-
-#ifndef CLI_AUTH_PASSWORD_MIN_LEN
-    #define CLI_AUTH_PASSWORD_MIN_LEN    4
-#endif
-
-#ifndef CLI_AUTH_PASSWORD_MAX_LEN
-    #define CLI_AUTH_PASSWORD_MAX_LEN    32
-#endif
-
-// Note: CLI_AUTH_HASH_ITERATIONS is defined in config.h
-// Compile-time check to ensure minimum security requirements
 #if !defined(CLI_AUTH_HASH_ITERATIONS)
-    #error "CLI_AUTH_HASH_ITERATIONS must be defined in config.h"
-#endif
-
-#if CLI_AUTH_HASH_ITERATIONS < 100000
-    #warning "CLI_AUTH_HASH_ITERATIONS below NIST SP 800-132 recommended minimum of 100,000"
+    #error "CLI_AUTH_HASH_ITERATIONS must be defined in config.h (include config.h first)"
 #endif
 
 // Salt size for password hashing

@@ -1,7 +1,10 @@
 /**
  * @file config.h
  * @brief Central system configuration - Optimized Clock System
- * 
+ *
+ * Feature toggles (security, experimental estimators) live in:
+ *   config/features.h  — defaults favor bring-up over hardening
+ *
  * Clock Configuration (16MHz HSE):
  *   HSE = 16 MHz (external crystal)
  *   PLL: M=16, N=336, P=4, Q=7
@@ -9,9 +12,9 @@
  *   HCLK   = 84 MHz
  *   PCLK1  = 42 MHz (APB1 - ADC, UART, TIM2-5)
  *   PCLK2  = 84 MHz (APB2 - TIM1, ADC)
- * 
- * @version 2.3.1
- * @date 2026-04-15
+ *
+ * @version 2.3.2
+ * @date 2026-08-08
  */
 
 #ifndef CONFIG_H
@@ -20,13 +23,16 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* Master feature switches (CLI auth, HMAC, ripple L/C, etc.) */
+#include "features.h"
+
 // =============================================================================
 // VERSION
 // =============================================================================
 #define ADAPTIVEPWM_VERSION_MAJOR   2
 #define ADAPTIVEPWM_VERSION_MINOR   3
-#define ADAPTIVEPWM_VERSION_PATCH   1
-#define ADAPTIVEPWM_VERSION_STRING  "2.3.1"
+#define ADAPTIVEPWM_VERSION_PATCH   2
+#define ADAPTIVEPWM_VERSION_STRING  "2.3.2"
 
 // =============================================================================
 // CLOCK CONFIGURATION
@@ -53,42 +59,32 @@
 
 // =============================================================================
 // RNG CONFIGURATION (SEC-033 - Hardware RNG)
+// RNG_ENABLED comes from config/features.h (0 on STM32F401)
 // =============================================================================
-
-// Enable Hardware RNG peripheral (STM32F401)
-// Uses dedicated entropy source from analog noise
-#ifndef RNG_ENABLED
-    #define RNG_ENABLED             0  // STM32F401 has no hardware RNG
-#endif
 
 // RNG clock: AHB2 bus clock (HCLK)
 #define RNG_CLOCK_ENABLE()          __HAL_RCC_RNG_CLK_ENABLE()
 #define RNG_CLOCK_DISABLE()         __HAL_RCC_RNG_CLK_DISABLE()
 
-// RNG error handling
 #ifndef RNG_ERROR_RECOVERY
-    #define RNG_ERROR_RECOVERY      1   // Auto-recover from clock errors
+    #define RNG_ERROR_RECOVERY      1
 #endif
 
-// RNG fallback: Use software PRNG if hardware RNG fails
-// Note: Only enable for testing on platforms without hardware RNG
+/* Software fallback required on F401 (no HW RNG). Only used if auth/crypto runs. */
 #ifndef RNG_FALLBACK_SOFTWARE
-    #define RNG_FALLBACK_SOFTWARE   1  // Required for STM32F401   // Disabled by default (security requirement)
+    #define RNG_FALLBACK_SOFTWARE   1
 #endif
 
-// RNG timeout for polling mode (milliseconds)
 #ifndef RNG_TIMEOUT_MS
     #define RNG_TIMEOUT_MS          100
 #endif
 
-// Maximum RNG generation attempts before error
 #ifndef RNG_MAX_ATTEMPTS
-// Setup mode timeout (milliseconds)
-#ifndef SETUP_TIMEOUT_MS
-    #define SETUP_TIMEOUT_MS        30000  // 30 seconds
+    #define RNG_MAX_ATTEMPTS        3
 #endif
 
-    #define RNG_MAX_ATTEMPTS        3
+#ifndef SETUP_TIMEOUT_MS
+    #define SETUP_TIMEOUT_MS        30000  // 30 seconds
 #endif
 
 // =============================================================================
@@ -132,6 +128,25 @@
 #define ADC_VREF_MV                 3300.0f     // 3.3V reference
 #define ADC_RESOLUTION              4096.0f     // 12-bit (0-4095)
 
+/*
+ * Front-end scaling (adjust for your power board via build flags or edit).
+ * V_actual = V_adc * DIVIDER_RATIO  (e.g. 100k/10k → 11.0)
+ * I_actual = V_adc / CURRENT_V_PER_AMP  (sense amp: volts per amp at ADC pin)
+ *
+ * Defaults = 1.0 / gentle current scale for Nucleo bring-up without dividers.
+ * Power stage example: -DADC_VIN_DIVIDER_RATIO=11 -DADC_VOUT_DIVIDER_RATIO=11
+ *                      -DADC_CURRENT_V_PER_AMP=0.1f
+ */
+#ifndef ADC_VIN_DIVIDER_RATIO
+#define ADC_VIN_DIVIDER_RATIO       1.0f
+#endif
+#ifndef ADC_VOUT_DIVIDER_RATIO
+#define ADC_VOUT_DIVIDER_RATIO      1.0f
+#endif
+#ifndef ADC_CURRENT_V_PER_AMP
+#define ADC_CURRENT_V_PER_AMP       1.0f   /* 1 V at pin → 1 A (lab default) */
+#endif
+
 // ADC filtering options
 #define ADC_FILTER_IIR_ENABLED      1
 #define ADC_FILTER_IIR_ALPHA        0.1f        // IIR filter coefficient
@@ -167,24 +182,17 @@
 
 // =============================================================================
 // CLI AUTHENTICATION CONFIGURATION (SEC-019)
+// CLI_AUTH_ENABLED comes from config/features.h (default OFF for bring-up)
 // =============================================================================
 
-// Enable UART CLI authentication
-#ifndef CLI_AUTH_ENABLED
-    #define CLI_AUTH_ENABLED          1
-#endif
-
-// Maximum failed attempts before lockout
 #ifndef CLI_AUTH_MAX_ATTEMPTS
     #define CLI_AUTH_MAX_ATTEMPTS     3
 #endif
 
-// Lockout duration in seconds (5 minutes)
 #ifndef CLI_AUTH_LOCKOUT_DURATION_S
     #define CLI_AUTH_LOCKOUT_DURATION_S  300
 #endif
 
-// Password length constraints
 #ifndef CLI_AUTH_PASSWORD_MIN_LEN
     #define CLI_AUTH_PASSWORD_MIN_LEN    4
 #endif
@@ -193,19 +201,15 @@
     #define CLI_AUTH_PASSWORD_MAX_LEN    32
 #endif
 
-// PBKDF2 iteration count (100000 = NIST SP 800-132 compliant, SEC-027)
-// Previous value: 1000 (minimum recommended)
-// Updated: 2026-04-13 - Increased per security assessment ADP-ARCH-001
+/* High iteration count only matters when FEATURE_CLI_AUTH=1 */
 #ifndef CLI_AUTH_HASH_ITERATIONS
     #define CLI_AUTH_HASH_ITERATIONS     100000
 #endif
 
-// Compile-time check for minimum PBKDF2 iterations (security requirement)
-#if CLI_AUTH_HASH_ITERATIONS < 100000
+#if FEATURE_SECURITY_STRICT && (CLI_AUTH_HASH_ITERATIONS < 100000)
     #warning "CLI_AUTH_HASH_ITERATIONS below NIST SP 800-132 recommended minimum of 100,000"
 #endif
 
-// Session timeout (seconds, 0 = no timeout)
 #ifndef CLI_AUTH_SESSION_TIMEOUT_S
     #define CLI_AUTH_SESSION_TIMEOUT_S   300  // 5 minutes
 #endif
@@ -214,16 +218,27 @@
 // SAFETY LIMITS
 // =============================================================================
 
-// Voltage limits
-#define VOLTAGE_MIN_V               5.0f
+/*
+ * Voltage limits in engineering units after divider scale.
+ * With lab defaults (divider=1), limits apply to 0–3.3 V ADC pin domain —
+ * VIN UV is disabled below when FEATURE bring-up: use VIN_UV_ENABLE.
+ */
+#define VOLTAGE_MIN_V               0.5f        /* lab-friendly; raise for real bus */
 #define VOLTAGE_MAX_V               30.0f
-#define VOLTAGE_WARNING_LOW_V       6.0f
+#define VOLTAGE_WARNING_LOW_V       0.6f
 #define VOLTAGE_WARNING_HIGH_V      28.0f
+#define VOLTAGE_UV_HYSTERESIS_V     0.2f
+#define SAFETY_VOUT_UV_ENABLE_MS    500U
+#define SAFETY_FAULT_COOLDOWN_MS    2000U
+/* 0 = do not trip on VIN UV (useful when Vin not wired yet); 1 = enforce */
+#ifndef SAFETY_VIN_UV_ENABLE
+#define SAFETY_VIN_UV_ENABLE        0
+#endif
 
 // Current limits
 #define CURRENT_MAX_A               10.0f
 #define CURRENT_WARNING_A           8.0f
-#define CURRENT_SENSE_OHMS          0.01f       // 10 mOhm shunt
+#define CURRENT_SENSE_OHMS          0.01f       // 10 mOhm shunt (info; scale via ADC_CURRENT_V_PER_AMP)
 
 // Temperature limits
 #define TEMP_WARNING_C              75.0f
@@ -235,14 +250,20 @@
 // CONTROL PARAMETERS
 // =============================================================================
 
-// Efficiency target
+// Primary: regulate output voltage (FEATURE_VOUT_CONTROL)
+// Lab default 1.5 V fits 0–3.3 V pin domain; set 12 V on real converters.
+#ifndef VOUT_SETPOINT_DEFAULT_V
+#define VOUT_SETPOINT_DEFAULT_V     1.5f
+#endif
+
+// Efficiency target (only if FEATURE_EFFICIENCY_CONTROL)
 #define TARGET_EFFICIENCY           0.95f
 #define EFFICIENCY_MIN_ACCEPTABLE   0.85f
 
-// Control loop gains
-#define DUTY_KP                     0.05f       // Proportional gain
-#define DUTY_KI                     0.01f       // Integral gain (was 0.0)
-#define DUTY_KD                     0.001f      // Derivative gain (was 0.0)
+// Control loop gains (Vout PID / duty)
+#define DUTY_KP                     0.05f
+#define DUTY_KI                     0.01f
+#define DUTY_KD                     0.001f
 
 // Setpoint weighting - reduces overshoot while maintaining speed
 #define PID_SETPOINT_WEIGHT         0.7f        // 0-1, lower = less overshoot
@@ -257,15 +278,16 @@
 
 // PID Controller Structure with Anti-Windup
 typedef struct {
-    float Kp, Ki, Kd;          // Gains
+    float Kp, Ki, Kd;            // Gains
     float setpoint_weight;       // Setpoint weighting (0-1)
-    float derivative_filter;       // Low-pass filter for derivative (0-1)
+    float derivative_filter;     // Low-pass filter for derivative (0-1)
     float integral;              // Integral accumulator
     float integral_min, integral_max; // Anti-windup limits
-    float prev_error;            // Previous error for derivative
+    float prev_error;            // Previous error
     float prev_measurement;      // Previous measurement (derivative on measurement)
+    float d_filtered;            // Filtered d/dt(measurement) state
     float output_min, output_max; // Output limits
-    bool initialized;          // First run flag
+    bool initialized;            // First run flag
 } PID_Controller_t;
 
 // PID Functions
@@ -293,31 +315,22 @@ void PID_SetIntegral(PID_Controller_t* pid, float integral);
 #define FLASH_LOG_ENTRIES_PER_SECTOR (FLASH_LOG_SIZE / FLASH_LOG_ENTRY_SIZE)
 
 // =============================================================================
-// FLASH LOGGER HMAC-SHA256 INTEGRITY PROTECTION (SEC-023)
+// FLASH LOGGER HMAC-SHA256 (SEC-023) — optional, see features.h
+// FLASH_LOGGER_HMAC_ENABLED comes from config/features.h (default OFF)
 // =============================================================================
 
-// Enable HMAC-SHA256 integrity protection
-#define FLASH_LOGGER_HMAC_ENABLED   1
+#define HMAC_SHA256_KEY_SIZE        32
+#define HMAC_SHA256_SIGNATURE_SIZE  32
+#define HMAC_SALT_SIZE              16
 
-// HMAC configuration
-#define HMAC_SHA256_KEY_SIZE        32      // 256-bit key
-#define HMAC_SHA256_SIGNATURE_SIZE  32      // 256-bit signature
-#define HMAC_SALT_SIZE              16      // 128-bit salt per entry
-
-// Key storage location - Sector 6 (128KB, just before log sector)
-// In production, use secure storage (HSM, secure element, option bytes)
 #define HMAC_KEY_FLASH_ADDR         0x080D0000
 #define HMAC_KEY_SECTOR             FLASH_SECTOR_6
 
-// HMAC magic values
 #define FLASH_LOG_HMAC_MAGIC        0x484D4143  // "HMAC"
-#define FLASH_LOG_CHAIN_MAGIC       0x43484131  // "CHA1" (Chain v1)
+#define FLASH_LOG_CHAIN_MAGIC       0x43484131  // "CHA1"
 
-// HMAC log entry size (80 bytes vs 32 bytes for legacy)
 #define FLASH_HMAC_ENTRY_SIZE       80
 #define FLASH_HMAC_HEADER_SIZE      64
-
-// Maximum entries with HMAC (fewer due to larger entry size)
 #define FLASH_HMAC_MAX_ENTRIES      ((FLASH_LOG_SIZE - FLASH_HMAC_HEADER_SIZE) / FLASH_HMAC_ENTRY_SIZE)
 
 // =============================================================================
@@ -340,18 +353,15 @@ void PID_SetIntegral(PID_Controller_t* pid, float integral);
 #endif
 
 // =============================================================================
-// SECURITY FEATURE FLAGS (Added in v2.3.0)
+// SECURITY FEATURE FLAGS (aliases — source of truth is config/features.h)
 // =============================================================================
 
-// Feature availability flags
-#define FEATURE_FLASH_HMAC          1   // HMAC-SHA256 for flash logger (SEC-023)
-#define FEATURE_UART_AUTH           CLI_AUTH_ENABLED  // UART CLI authentication (SEC-019)
-#define FEATURE_WATCHDOG_TASK       0   // Task-level watchdog (ADP-002)
-#define FEATURE_HARDWARE_RNG        RNG_ENABLED       // Hardware RNG (SEC-033)
+#define FEATURE_FLASH_HMAC          FEATURE_FLASH_LOGGER_HMAC
+#define FEATURE_UART_AUTH           FEATURE_CLI_AUTH
+#define FEATURE_WATCHDOG_TASK       0
 
-// Security policy
 #define SECURITY_TAMPER_RESPONSE    0   // 0=Log only, 1=Halt on tamper
-#define SECURITY_KEY_ROTATION_DAYS  365 // Key rotation period
+#define SECURITY_KEY_ROTATION_DAYS  365
 
 // =============================================================================
 // FLASH MEMORY MAP
@@ -378,30 +388,17 @@ void PID_SetIntegral(PID_Controller_t* pid, float integral);
 
 // =============================================================================
 // SETUP GPIO CONFIGURATION (SEC-031)
+// SETUP_CONFIRM_ENABLED comes from config/features.h (default OFF)
 // =============================================================================
 
-// Enable physical button/jumper confirmation for first-time password setup
-#ifndef SETUP_CONFIRM_ENABLED
-    #define SETUP_CONFIRM_ENABLED       1
-#endif
-
-// Primary confirmation: Push button on PC13 (USER button on Nucleo)
 #define SETUP_CONFIRM_GPIO_PORT     GPIOC
 #define SETUP_CONFIRM_GPIO_PIN      GPIO_PIN_13
 
-// Alternative confirmation: Jumper on PA0 (A0)
 #define SETUP_CONFIRM_ALT_GPIO_PORT GPIOA
 #define SETUP_CONFIRM_ALT_GPIO_PIN  GPIO_PIN_0
 
-// Button debouncing (milliseconds)
 #define SETUP_BUTTON_DEBOUNCE_MS    50
-
-// Minimum button press duration (milliseconds)
 #define SETUP_BUTTON_PRESS_MIN_MS   2000
-
-// Setup confirmation modes
 #define SETUP_CONFIRM_MODE          0   // 0=Button, 1=Jumper, 2=Auto
-
-// Return codes
 
 #endif // CONFIG_H

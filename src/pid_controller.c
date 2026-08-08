@@ -51,6 +51,7 @@ void PID_Init(PID_Controller_t* pid, float Kp, float Ki, float Kd, float output_
     pid->integral = 0.0f;
     pid->prev_error = 0.0f;
     pid->prev_measurement = 0.0f;
+    pid->d_filtered = 0.0f;
     pid->initialized = false;
     
     DEBUG_PRINT("PID: Initialized Kp=%.4f Ki=%.4f Kd=%.4f limits=[%.3f, %.3f]",
@@ -85,17 +86,13 @@ float PID_Compute(PID_Controller_t* pid, float setpoint, float measurement, floa
     float integral = pid->Ki * pid->integral;
     
     // Derivative term (derivative on measurement, not error)
-    // This prevents derivative kick on setpoint changes
+    // Filter state is per-instance (pid->d_filtered), not file-static.
     float derivative = 0.0f;
     if (pid->initialized) {
         float d_measurement = (measurement - pid->prev_measurement) / dt;
-        // Apply low-pass filter to derivative
-        // d_filtered = d_filtered_prev * alpha + d_measurement * (1-alpha)
-        static float d_filtered_prev = 0.0f;
-        float d_filtered = d_filtered_prev * pid->derivative_filter + 
-                           d_measurement * (1.0f - pid->derivative_filter);
-        d_filtered_prev = d_filtered;
-        derivative = -pid->Kd * d_filtered;  // Negative because d/dt(measurement) = -d/dt(error)
+        pid->d_filtered = pid->d_filtered * pid->derivative_filter +
+                          d_measurement * (1.0f - pid->derivative_filter);
+        derivative = -pid->Kd * pid->d_filtered;
     }
     
     // Calculate output
@@ -143,6 +140,7 @@ void PID_Reset(PID_Controller_t* pid)
     pid->integral = 0.0f;
     pid->prev_error = 0.0f;
     pid->prev_measurement = 0.0f;
+    pid->d_filtered = 0.0f;
     pid->initialized = false;
     
     DEBUG_PRINT("PID: Reset");

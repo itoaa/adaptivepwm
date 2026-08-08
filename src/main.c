@@ -179,33 +179,21 @@ static bool Initialize_System(void)
         
         Adaptive_UART_SendString(&uart_handle, "\r\n");
         Adaptive_UART_SendString(&uart_handle, "AdaptivePWM v" ADAPTIVEPWM_VERSION_STRING "\r\n");
-        Adaptive_UART_SendString(&uart_handle, "Enhanced Safety System v1.0\r\n");
-        Adaptive_UART_SendString(&uart_handle, "Clock: 16MHz HSE → 84MHz SYSCLK\r\n");
-        
-        // Display authentication status
+        Adaptive_UART_SendString(&uart_handle, "Runtime: bare-metal superloop (measure/control/safety/CLI)\r\n");
+        Adaptive_UART_SendString(&uart_handle, "Profile: bring-up (config/features.h)\r\n");
 #if CLI_AUTH_ENABLED
-        if (CLI_Auth_IsPasswordSet()) {
-            Adaptive_UART_SendString(&uart_handle, "\r\n");
-            Adaptive_UART_SendString(&uart_handle, "╔════════════════════════════════════╗\r\n");
-            Adaptive_UART_SendString(&uart_handle, "║     AUTHENTICATION REQUIRED        ║\r\n");
-            Adaptive_UART_SendString(&uart_handle, "╚════════════════════════════════════╝\r\n");
-            Adaptive_UART_SendString(&uart_handle, "\r\n");
-            Adaptive_UART_SendString(&uart_handle, "Please login with: login <password>\r\n");
-            Adaptive_UART_SendString(&uart_handle, "\r\n");
-        } else {
-            Adaptive_UART_SendString(&uart_handle, "\r\n");
-            Adaptive_UART_SendString(&uart_handle, "╔════════════════════════════════════╗\r\n");
-            Adaptive_UART_SendString(&uart_handle, "║   INITIAL SETUP REQUIRED           ║\r\n");
-            Adaptive_UART_SendString(&uart_handle, "╚════════════════════════════════════╝\r\n");
-            Adaptive_UART_SendString(&uart_handle, "\r\n");
-            Adaptive_UART_SendString(&uart_handle, "No password set. First login sets password.\r\n");
-            Adaptive_UART_SendString(&uart_handle, "Use: login <new_password>\r\n");
-            Adaptive_UART_SendString(&uart_handle, "\r\n");
-        }
-        Adaptive_UART_SendString(&uart_handle, "\r\n> ");
+        Adaptive_UART_SendString(&uart_handle, "Auth: ENABLED\r\n");
 #else
-        Adaptive_UART_SendString(&uart_handle, "System initialized (Auth: DISABLED)\r\n> ");
+        Adaptive_UART_SendString(&uart_handle, "Auth: DISABLED (lab)\r\n");
 #endif
+#if FEATURE_VOUT_CONTROL
+        Adaptive_UART_SendString(&uart_handle, "Control: Vout PID\r\n");
+#elif FEATURE_EFFICIENCY_CONTROL
+        Adaptive_UART_SendString(&uart_handle, "Control: efficiency (experimental)\r\n");
+#else
+        Adaptive_UART_SendString(&uart_handle, "Control: open-loop duty\r\n");
+#endif
+        Adaptive_UART_SendString(&uart_handle, "Type help | status | pwm start | monitor 5\r\n> ");
     }
     
     if (!Tasks_Init(&task_manager)) {
@@ -359,24 +347,9 @@ void USART2_IRQHandler(void)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
+    /* ISR: only buffer RX. Commands are processed in the main superloop. */
     if (huart->Instance == USART2) {
         Adaptive_UART_ProcessRX(&uart_handle);
-        if (Adaptive_UART_IsCmdReady(&uart_handle)) {
-            char cmd[128];
-            Adaptive_UART_GetCommand(&uart_handle, cmd, sizeof(cmd));
-            CLI_ProcessCommand(&uart_handle, cmd);
-            
-            // Check authentication state for prompt
-#if CLI_AUTH_ENABLED
-            if (CLI_Auth_IsAuthenticated()) {
-                uint32_t remaining = CLI_Auth_GetSessionRemaining();
-                if (remaining > 0 && remaining < 60) {
-                    Adaptive_UART_Printf(&uart_handle, "[timeout: %lus] ", remaining);
-                }
-            }
-#endif
-            Adaptive_UART_SendString(&uart_handle, "> ");
-        }
     }
 }
 

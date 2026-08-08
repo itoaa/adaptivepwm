@@ -1,25 +1,38 @@
 # AdaptivePWM Documentation
 
+[![CI](https://github.com/itoaa/adaptivepwm/actions/workflows/ci.yml/badge.svg)](https://github.com/itoaa/adaptivepwm/actions/workflows/ci.yml)
+
 ## Project Overview
 
-AdaptivePWM is a real-time control system for buck/boost converters and electronic speed controllers (ESCs). It continuously monitors electrical parameters and dynamically adjusts PWM output for optimal efficiency.
+AdaptivePWM is a real-time control system for buck/boost converters and electronic speed controllers (ESCs). It monitors electrical parameters and adjusts PWM for efficiency — **bring-up first**, optional security later.
 
-**Version:** 2.4.0  
+**Version:** 2.3.2 (bring-up profile)  
 **Target:** STM32F401RE @ 84 MHz  
 **Clock:** 16 MHz HSE → 84 MHz SYSCLK  
-**Framework:** CISSP-Aligned Security Framework
+**Honest status:** [`MATURITY.md`](MATURITY.md) · **HIL:** [`docs/HIL_CHECKLIST.md`](docs/HIL_CHECKLIST.md)  
+**CI:** GitHub Actions builds PlatformIO `env:ci` on every push/PR to `main`.
+
+### Feature profile (important)
+
+Optional security and experimental L/C/ESR are controlled in **`config/features.h`** and are **OFF by default** so the system can be brought up without login gates or incomplete crypto paths.
+
+```text
+FEATURE_SECURITY_PROFILE          = 0   # master security off
+FEATURE_CLI_AUTH                  = 0
+FEATURE_FLASH_LOGGER_HMAC         = 0
+FEATURE_SWITCH_RIPPLE_ESTIMATION  = 0   # needs faster sampling than default
+FEATURE_EFFICIENCY_CONTROL        = 1   # primary control path
+```
+
+Enable hardening later with `FEATURE_SECURITY_PROFILE=1` (only after MATURITY items are done).
 
 ---
 
-## What's New in v2.4.0
+## Security features (optional — deferred)
 
-### Security Framework (CISSP/NIST Aligned)
-- **SEC-031:** Physical button confirmation for first-time password setup
-- **SEC-049:** Secure bootloader with Ed25519 signature verification
-- **SEC-043:** Formal risk assessment with CVSS 3.1 scoring
-- **CLI Authentication:** Password-based login with session management
-- **Flash Logger HMAC:** Integrity protection for log entries (pending)
-- **Secure Boot:** Anti-rollback, RDP Level 2, recovery mode
+When enabled via `config/features.h` / build flags:
+- CLI authentication, setup confirmation, flash HMAC, secure bootloader path
+- Not required for lab bring-up; recovery flash path still incomplete
 
 ### Enhanced Control Systems
 - **Full PID Control:** Now with integral (Ki=0.01) and derivative (Kd=0.001) terms

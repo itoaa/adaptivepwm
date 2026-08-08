@@ -6,6 +6,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -Werror -std=c11 -g -O0 \
          -I../include \
          -I../src \
+         -I../config \
          -I. \
          -DUNITY_INCLUDE_CONFIG_H \
          -DDEBUG \

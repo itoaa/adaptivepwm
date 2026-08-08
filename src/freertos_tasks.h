@@ -34,6 +34,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "stm32f4xx_hal.h"
+#include "hal_uart.h"
 
 // FreeRTOS includes - conditionally compiled
 #ifdef USE_FREERTOS
@@ -184,17 +185,24 @@ typedef struct {
 bool Tasks_Init(TaskManager_t* manager);
 
 /**
- * @brief Start FreeRTOS scheduler
- * 
- * This function does not return in FreeRTOS mode.
- * In bare-metal mode, enters a simple delay loop.
+ * @brief Start runtime (FreeRTOS scheduler or bare-metal superloop)
  *
- * Called by: main() after Tasks_Init()
- * Never returns (in FreeRTOS mode)
- *
- * @callergraph
+ * Never returns.
  */
 void Tasks_StartScheduler(void);
+
+/** Vout regulation setpoint (volts) */
+float Tasks_GetVoutSetpoint(void);
+void Tasks_SetVoutSetpoint(float v);
+
+/** Soft safety latch */
+bool Tasks_IsSafetyFault(void);
+uint32_t Tasks_GetLastFaultCode(void);
+void Tasks_ClearSafetyFault(void);
+
+/** Non-blocking serial monitor (runs in Loop_CLI) */
+void Tasks_StartMonitor(Adaptive_UART_t* uart, int duration_s);
+bool Tasks_MonitorActive(void);
 
 /**
  * @brief Suspend control tasks

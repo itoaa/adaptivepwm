@@ -1,69 +1,40 @@
-# AdaptivePWM Configuration Directory
+# Configuration
 
-## Overview
+## Primary: `features.h`
 
-This directory contains platform-specific and build-specific configuration files for AdaptivePWM.
+**This is the main switchboard for optional features.**
 
-## Structure
+Default profile is **bring-up / lab**: security hardening off, switch-ripple L/C/ESR off, efficiency control on.
 
-```
-config/
-├── README.md              # This file
-├── nucleo_f401re.h       # NUCLEO-F401RE board configuration
-├── stm32f401xe.h          # STM32F401xE MCU configuration
-└── debug.h                # Debug-specific overrides
-```
+| Flag | Default | Effect |
+|------|---------|--------|
+| `FEATURE_SECURITY_PROFILE` | 0 | Master: sets several security flags when 1 |
+| `FEATURE_CLI_AUTH` | 0 | UART password login |
+| `FEATURE_SETUP_CONFIRM` | 0 | Physical button for first password |
+| `FEATURE_FLASH_LOGGER_HMAC` | 0 | HMAC on flash log entries |
+| `FEATURE_SECURE_BOOT` | 0 | Awareness flag (bootloader is separate) |
+| `FEATURE_HARDWARE_RNG` | 0 | F401 has no HW RNG |
+| `FEATURE_EFFICIENCY_CONTROL` | 1 | Duty adjust from measured efficiency |
+| `FEATURE_SWITCH_RIPPLE_ESTIMATION` | 0 | Experimental L/C/ESR from ripple |
 
-## Configuration Files
+### Enable security later
 
-### nucleo_f401re.h
-
-Configuration specific to the NUCLEO-F401RE development board:
-- Pin mappings
-- Clock configuration
-- Peripheral settings
-- Safety thresholds
-
-### stm32f401xe.h
-
-Configuration specific to the STM32F401xE MCU family:
-- Clock frequencies
-- Peripheral capabilities
-- Memory layout
-- Power settings
-
-### debug.h
-
-Debug-specific configuration overrides:
-- Extended logging
-- Debug breakpoints
-- Test mode settings
-- Mock hardware settings
-
-## Usage
-
-Include the appropriate configuration header at compile time:
+Edit `config/features.h`:
 
 ```c
-// In your source file
-#include "config/nucleo_f401re.h"
+#define FEATURE_SECURITY_PROFILE  1
 ```
 
-Or define at compile time:
+Or pass build flags (PlatformIO `build_flags`):
 
-```bash
--DCONFIG_BOARD_NUCLEO_F401RE
+```
+-DFEATURE_CLI_AUTH=1
 ```
 
-## Adding New Configurations
+See `MATURITY.md` before treating security as “done”.
 
-To add support for a new board or platform:
+## Board-specific headers
 
-1. Create a new header file: `config/your_board.h`
-2. Define all required macros
-3. Update build system to include the new config
-4. Document the configuration in this README
+Optional board files may be added here later. Core runtime config remains `src/config.h` (includes `features.h`).
 
-## Version Control
-
-Configuration files should be version-controlled and reviewed when hardware changes occur.
+Include path: PlatformIO adds `-Iconfig` so `#include "features.h"` works from firmware sources.

@@ -1,2 +1,8 @@
 .pio
 *.tmp
+
+# Private cryptographic material — never commit
+keys/*private*
+keys/*.key
+*.pem
+!keys/bootloader_public.pem

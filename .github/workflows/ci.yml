@@ -1,0 +1,83 @@
+# AdaptivePWM — continuous integration
+# Builds firmware (PlatformIO env:ci) and host unit tests that do not need hardware.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    name: Firmware (PlatformIO env:ci)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install -U pip
+          python -m pip install -U platformio
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+            .pio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: Build env:ci
+        run: python -m platformio run -e ci
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: adaptivepwm-firmware-ci
+          path: |
+            .pio/build/ci/firmware.bin
+            .pio/build/ci/firmware.elf
+            .pio/build/ci/firmware.hex
+          if-no-files-found: error
+
+  host-smoke:
+    name: Host compile smoke (gcc)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      - name: Compile pure modules on host
+        run: |
+          set -e
+          # Smoke-compile control math without STM32 HAL (headers that need HAL are excluded)
+          gcc -std=c11 -Wall -Wextra -c -O0 \
+            -I src -I config -I include \
+            -DDEBUG \
+            src/efficiency_calc.c -o /tmp/efficiency_calc.o
+          gcc -std=c11 -Wall -Wextra -c -O0 \
+            -I src -I config -I include \
+            -DDEBUG \
+            src/pid_controller.c -o /tmp/pid_controller.o
+          echo "Host smoke compile OK"

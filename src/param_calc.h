@@ -88,15 +88,23 @@ typedef struct {
  * All fields populated by ParamCalc_CalculateAll().
  */
 typedef struct {
+    /* Mean operating point (always updated when buffer has enough samples) */
+    float avg_vin;            // Average input voltage (V)
+    float avg_vout;           // Average output voltage (V)
+    float avg_current;        // Average current (A)
+    bool averages_valid;      // True when mean values are usable
+
+    /* Switch-ripple L/C/ESR — only valid if FEATURE_SWITCH_RIPPLE_ESTIMATION=1
+     * and sampling is adequate for fsw (see MATURITY.md). */
     float inductance_mH;      // Calculated inductance (mH)
     float capacitance_uF;     // Calculated capacitance (µF)
-    float esr_mOhm;          // Calculated ESR (mΩ)
+    float esr_mOhm;           // Calculated ESR (mΩ)
     float ripple_current;     // Peak-to-peak ripple current (A)
     float ripple_voltage;     // Peak-to-peak ripple voltage (V)
     float switching_freq;     // Measured switching frequency (Hz)
-    bool dcm_detected;        // PWM-ARCH-003: True if DCM detected
-    bool valid;              // True if all calculations passed validation
-    uint32_t calc_time_ms;   // Timestamp of calculation
+    bool dcm_detected;        // True if DCM detected
+    bool valid;               // True if L/C/ESR passed validation (ripple path)
+    uint32_t calc_time_ms;    // Timestamp of calculation
 } CalculatedParams_t;
 
 /**

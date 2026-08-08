@@ -21,6 +21,8 @@
 #include "temperature_monitor.h"
 #include "fault_history.h"
 #include "enhanced_safety.h"
+#include "freertos_tasks.h"
+#include "config.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -208,25 +210,41 @@ bool cmd_status(Adaptive_UART_t* uart, int argc, const char* argv[])
         Adaptive_UART_Printf(uart, "  Freq: %lu Hz\r\n", Adaptive_PWM_GetFrequency(&pwm_handle));
         Adaptive_UART_Printf(uart, "  Duty: %.2f %%\r\n", Adaptive_PWM_GetDuty(&pwm_handle) * 100);
     } else if (argc > 1 && strcmp(argv[1], "params") == 0) {
+        if (calc_params.averages_valid) {
+            Adaptive_UART_Printf(uart, "Averages:\r\n");
+            Adaptive_UART_Printf(uart, "  Vin:  %.3f V\r\n", calc_params.avg_vin);
+            Adaptive_UART_Printf(uart, "  Vout: %.3f V\r\n", calc_params.avg_vout);
+            Adaptive_UART_Printf(uart, "  I:    %.3f A\r\n", calc_params.avg_current);
+        }
+#if FEATURE_SWITCH_RIPPLE_ESTIMATION
         if (calc_params.valid) {
-            Adaptive_UART_Printf(uart, "Parameters:\r\n");
+            Adaptive_UART_Printf(uart, "L/C/ESR (switch-ripple, experimental):\r\n");
             Adaptive_UART_Printf(uart, "  L:    %.3f mH\r\n", calc_params.inductance_mH);
             Adaptive_UART_Printf(uart, "  C:    %.3f uF\r\n", calc_params.capacitance_uF);
             Adaptive_UART_Printf(uart, "  ESR:  %.3f mOhm\r\n", calc_params.esr_mOhm);
             Adaptive_UART_Printf(uart, "  dI:   %.3f A\r\n", calc_params.ripple_current);
             Adaptive_UART_Printf(uart, "  dV:   %.3f V\r\n", calc_params.ripple_voltage);
         } else {
-            Adaptive_UART_Printf(uart, "Parameters not calculated\r\n");
+            Adaptive_UART_Printf(uart, "L/C/ESR: not valid\r\n");
+        }
+#else
+        Adaptive_UART_Printf(uart, "L/C/ESR: disabled (FEATURE_SWITCH_RIPPLE_ESTIMATION=0)\r\n");
+#endif
+        if (!calc_params.averages_valid) {
+            Adaptive_UART_Printf(uart, "Parameters not calculated yet\r\n");
         }
     } else {
         Adaptive_UART_Printf(uart, "System Status:\r\n");
         Adaptive_UART_Printf(uart, "  PWM: %s\r\n", pwm_handle.is_running ? "Running" : "Stopped");
-        Adaptive_UART_Printf(uart, "  Temp: %.1fC (%s)\r\n", 
-            temp_monitor.current_temp,
-            TempMonitor_IsSafe(&temp_monitor) ? "OK" : "ALERT");
+        Adaptive_UART_Printf(uart, "  Duty: %.1f%%  Vout SP: %.2f V\r\n",
+            (double)(Adaptive_PWM_GetDuty(&pwm_handle) * 100.0f),
+            (double)Tasks_GetVoutSetpoint());
+        Adaptive_UART_Printf(uart, "  Fault: %s (0x%lx)\r\n",
+            Tasks_IsSafetyFault() ? "LATCHED" : "OK",
+            (unsigned long)Tasks_GetLastFaultCode());
         Adaptive_UART_Printf(uart, "  Auth: %s\r\n",
             CLI_Auth_IsAuthenticated() ? "Authenticated" : "Unauthenticated");
-        Adaptive_UART_Printf(uart, "  Safety: %s\r\n",
+        Adaptive_UART_Printf(uart, "  SafetyMgr: %s\r\n",
             EnhancedSafety_GetStateString(EnhancedSafety_GetState(&safety_manager)));
     }
     return true;
@@ -234,35 +252,57 @@ bool cmd_status(Adaptive_UART_t* uart, int argc, const char* argv[])
 
 bool cmd_config(Adaptive_UART_t* uart, int argc, const char* argv[])
 {
-    (void)argc; (void)argv; // Unused for now
-    Adaptive_UART_Printf(uart, "Config - Not implemented\r\n");
+    if (argc >= 2 && strcmp(argv[1], "features") == 0) {
+        Adaptive_UART_Printf(uart, "Feature flags (config/features.h):\r\n");
+        Adaptive_UART_Printf(uart, "  SECURITY_PROFILE=%d\r\n", FEATURE_SECURITY_PROFILE);
+        Adaptive_UART_Printf(uart, "  CLI_AUTH=%d\r\n", FEATURE_CLI_AUTH);
+        Adaptive_UART_Printf(uart, "  VOUT_CONTROL=%d\r\n", FEATURE_VOUT_CONTROL);
+        Adaptive_UART_Printf(uart, "  EFFICIENCY_CONTROL=%d\r\n", FEATURE_EFFICIENCY_CONTROL);
+        Adaptive_UART_Printf(uart, "  SWITCH_RIPPLE_EST=%d\r\n", FEATURE_SWITCH_RIPPLE_ESTIMATION);
+        Adaptive_UART_Printf(uart, "  SOFT_FAULT_RECOVERY=%d\r\n", FEATURE_SOFT_FAULT_RECOVERY);
+        Adaptive_UART_Printf(uart, "  VIN_DIV=%.1f VOUT_DIV=%.1f I_V/A=%.3f\r\n",
+            (double)ADC_VIN_DIVIDER_RATIO, (double)ADC_VOUT_DIVIDER_RATIO,
+            (double)ADC_CURRENT_V_PER_AMP);
+        Adaptive_UART_Printf(uart, "  Vout SP=%.2f V\r\n", (double)Tasks_GetVoutSetpoint());
+        return true;
+    }
+    if (argc >= 3 && strcmp(argv[1], "vout") == 0) {
+        float sp = (float)atof(argv[2]);
+        Tasks_SetVoutSetpoint(sp);
+        Adaptive_UART_Printf(uart, "Vout setpoint = %.2f V\r\n", (double)Tasks_GetVoutSetpoint());
+        return true;
+    }
+    Adaptive_UART_Printf(uart, "Usage:\r\n");
+    Adaptive_UART_Printf(uart, "  config features\r\n");
+    Adaptive_UART_Printf(uart, "  config vout <volts>\r\n");
     return true;
 }
 
 bool cmd_monitor(Adaptive_UART_t* uart, int argc, const char* argv[])
 {
     int duration = 10;
-    if (argc > 1) duration = atoi(argv[1]);
-    if (duration < 1) duration = 1;
-    if (duration > 60) duration = 60;
-    
-    Adaptive_UART_Printf(uart, "Monitoring for %d seconds...\r\n", duration);
-    
-    // Note: Real implementation would loop and print periodically
-    // This is a placeholder
-    Adaptive_UART_Printf(uart, "(Monitor would run here)\r\n");
-    
+    if (argc > 1) {
+        duration = atoi(argv[1]);
+    }
+    /* Non-blocking: samples once per second from the runtime CLI loop */
+    Tasks_StartMonitor(uart, duration);
+    Adaptive_UART_Printf(uart, "monitor %d s started (async)\r\n", duration);
     return true;
 }
 
 bool cmd_pwm(Adaptive_UART_t* uart, int argc, const char* argv[])
 {
     if (argc < 2) {
-        Adaptive_UART_Printf(uart, "Usage: pwm [duty|start|stop]\r\n");
+        Adaptive_UART_Printf(uart, "Usage: pwm <start|stop|clear|%%duty>\r\n");
         return false;
     }
     
     if (strcmp(argv[1], "start") == 0) {
+        if (Tasks_IsSafetyFault()) {
+            Adaptive_UART_Printf(uart, "Safety fault latched (0x%lx). Use: pwm clear\r\n",
+                (unsigned long)Tasks_GetLastFaultCode());
+            return false;
+        }
         if (Adaptive_PWM_Start(&pwm_handle)) {
             Adaptive_UART_Printf(uart, "PWM started\r\n");
         } else {
@@ -274,19 +314,27 @@ bool cmd_pwm(Adaptive_UART_t* uart, int argc, const char* argv[])
         } else {
             Adaptive_UART_Printf(uart, "PWM stop failed\r\n");
         }
+    } else if (strcmp(argv[1], "clear") == 0) {
+        Tasks_ClearSafetyFault();
+        Adaptive_UART_Printf(uart, "Safety fault cleared (PWM still off until start)\r\n");
     } else {
-        float duty = atof(argv[1]);
-        if (duty < 0) duty = 0;
-        if (duty > 100) duty = 100;
+        float duty = (float)atof(argv[1]);
+        if (duty < 0.0f) {
+            duty = 0.0f;
+        }
+        if (duty > 100.0f) {
+            duty = 100.0f;
+        }
         duty /= 100.0f;
         
-        // Apply safety limits
         duty = EnhancedSafety_GetEffectiveDutyLimit(&safety_manager, duty);
         
         if (Adaptive_PWM_SetDuty(&pwm_handle, duty)) {
-            Adaptive_UART_Printf(uart, "Duty set to %.1f%%\r\n", duty * 100);
+            extern float current_duty_cycle;
+            current_duty_cycle = duty;
+            Adaptive_UART_Printf(uart, "Duty set to %.1f%%\r\n", (double)(duty * 100.0f));
         } else {
-            Adaptive_UART_Printf(uart, "Failed to set duty\r\n");
+            Adaptive_UART_Printf(uart, "Failed to set duty (is PWM started?)\r\n");
         }
     }
     return true;

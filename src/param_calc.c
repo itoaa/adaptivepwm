@@ -356,22 +356,41 @@ bool ParamCalc_CalculateAll(const WaveformBuffer_t* buffer,
     
     uint16_t count = GetSampleCount(buffer);
     if (count < MIN_SAMPLES_FOR_CALC) return false;
-    
+
+    /* Always compute mean operating point (control path does not need L/C) */
+    float sum_vin = 0.0f, sum_vout = 0.0f, sum_i = 0.0f;
+    for (uint16_t i = 0; i < count; i++) {
+        sum_vin += buffer->vin_samples[i];
+        sum_vout += buffer->vout_samples[i];
+        sum_i += buffer->current_samples[i];
+    }
+    params->avg_vin = sum_vin / (float)count;
+    params->avg_vout = sum_vout / (float)count;
+    params->avg_current = sum_i / (float)count;
+    params->averages_valid = true;
+    params->calc_time_ms = HAL_GetTick();
+
+#if FEATURE_SWITCH_RIPPLE_ESTIMATION
+    /*
+     * Experimental: estimate L/C/ESR from ripple. Valid only if ADC capture
+     * rate is well above PWM_FREQUENCY_HZ (Nyquist). Default host path is
+     * ~1 kHz into this buffer with 20 kHz PWM — results will be wrong.
+     */
     params->ripple_current = ParamCalc_CalcRippleCurrent(buffer);
     params->ripple_voltage = ParamCalc_CalcRippleVoltage(buffer);
     params->switching_freq = ParamCalc_DetectFrequency(buffer);
-    
-    // PWM-ARCH-003: Detect conduction mode
     params->dcm_detected = ParamCalc_DetectConductionMode(buffer);
-    
     params->inductance_mH = ParamCalc_CalculateL(buffer, duty_cycle, fsw);
     params->capacitance_uF = ParamCalc_CalculateC(buffer, duty_cycle, fsw);
     params->esr_mOhm = ParamCalc_CalculateESR(buffer);
-    
     params->valid = ParamCalc_Validate(params);
-    params->calc_time_ms = HAL_GetTick();
-    
     return params->valid;
+#else
+    (void)duty_cycle;
+    (void)fsw;
+    params->valid = false;  /* L/C/ESR intentionally not estimated */
+    return params->averages_valid;
+#endif
 }
 
 bool ParamCalc_Validate(const CalculatedParams_t* params)

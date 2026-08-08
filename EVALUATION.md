@@ -1,11 +1,14 @@
 # AdaptivePWM - Ny Utvärdering (Efter Implementation)
 
-**Datum:** 2026-03-21  
-**Status:** ✅ PRODUKTIONSKLAR
+**Datum:** 2026-03-21 (historisk)  
+**Uppdatering:** 2026-08-08 — se [`MATURITY.md`](MATURITY.md) för aktuell ärlig status.
+
+> **OBS:** Äldre “PRODUKTIONSKLAR / 95%” nedan är **historisk självskattning** och ska inte användas som release-gate.  
+> Default build: bring-up (`config/features.h`), HIL via `docs/HIL_CHECKLIST.md`.
 
 ---
 
-## 📊 Övergripande Bedömning
+## 📊 Övergripande Bedömning (historisk — ersatt av MATURITY.md)
 
 | Kategori | Före | Efter | Förändring |
 |----------|------|-------|------------|
