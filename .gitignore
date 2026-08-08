@@ -8,6 +8,7 @@ build/
 *.elf
 *.bin
 *.hex
+*.exe
 !Drivers/**/*
 
 # Private cryptographic material — never commit
@@ -21,3 +22,8 @@ keys/*.key
 .metadata/
 RemoteSystemsTempFiles/
 *.launch
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp

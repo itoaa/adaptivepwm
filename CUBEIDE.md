@@ -17,15 +17,15 @@ AdaptivePWM/
 ├── config/              # features.h (bring-up / security switches)
 ├── STM32F401RETX_FLASH.ld
 ├── Makefile             # primary build (CubeIDE can import as Makefile project)
-├── .project             # Eclipse / CubeIDE project name
-└── platformio.ini       # optional legacy PlatformIO env:ci
+└── .project             # Eclipse / CubeIDE project name
 ```
+
+Application code lives only under **`App/`** (not a parallel `src/` tree).
 
 ## Build (CLI)
 
 ```bash
-# Linux/macOS CI or Git Bash
-export PATH="$HOME/.platformio/packages/toolchain-gccarmnoneeabi/bin:$PATH"
+# Requires arm-none-eabi-gcc and make on PATH
 make -j$(nproc)
 
 # Or point at a toolchain:

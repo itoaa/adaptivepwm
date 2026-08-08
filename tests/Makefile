@@ -4,8 +4,9 @@
 # Compiler settings
 CC = gcc
 CFLAGS = -Wall -Wextra -Werror -std=c11 -g -O0 \
-         -I../include \
-         -I../src \
+         -I../App/Inc \
+         -I../App/Inc/safety \
+         -I../Core/Inc \
          -I../config \
          -I. \
          -DUNITY_INCLUDE_CONFIG_H \
@@ -14,8 +15,8 @@ CFLAGS = -Wall -Wextra -Werror -std=c11 -g -O0 \
 
 LDFLAGS = -lm
 
-# Unity framework sources
-UNITY_DIR = ../lib/unity
+# Unity framework (optional — place under tests/unity if used)
+UNITY_DIR = unity
 UNITY_SRC = $(UNITY_DIR)/unity.c
 
 # Test files

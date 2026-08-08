@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.5.0] - 2026-08-08
+
+### Project purpose (unchanged)
+
+Realtids PWM-styrning för buck/boost: mätning, Vout-reglering, safe area, lab-CLI — med valfri security senare.
+
+### Changed
+
+- **CubeIDE/Makefile** is the primary build (`App/`, `Core/`, `Drivers/`).
+- **Bring-up defaults:** Vout-PID on; efficiency/ripple/security off (`config/features.h`).
+- **Documentation cleanup:** single README + MATURITY + HIL; historical docs under `docs/archive/`.
+- Removed duplicate `src/` and `src_optimized/` trees; removed junk/binaries/legacy PlatformIO from active tree.
+
+### Notes
+
+- Older “production-ready / CISSP sprint” narratives live in `docs/archive/` only.
+- Secure boot recovery and full security profile remain incomplete (see MATURITY.md).
+
+---
+
 ## [2.4.0] - 2026-04-22
 
 ### Security (SEC-SPRINT-001: Critical Security Remediation Sprint)

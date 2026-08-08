@@ -1,35 +1,20 @@
-site_name: AdaptivePWM Documentation
-site_url: https://example.com/adaptivepwm
-repo_url: https://github.com/yourusername/AdaptivePWM
-repo_name: GitHub
+site_name: AdaptivePWM
+site_description: Realtids PWM-styrning för buck/boost (STM32F401RE)
 
 nav:
-  - Home: index.md
+  - Hem: index.md
+  - Mål: mål.md
   - Design: design.md
-  - API Reference: api.md
+  - API: api.md
   - Safety: safety.md
+  - HIL: HIL_CHECKLIST.md
+  - Metoder: metoder.md
+  - Arkiv: archive/README.md
 
 theme:
   name: material
-  palette:
-    primary: blue
-    accent: amber
-  icon:
-    repo: fontawesome/brands/github
 
 markdown_extensions:
+  - tables
   - toc:
       permalink: true
-  - admonition
-  - codehilite
-  - pymdownx.superfences
-  - pymdownx.tabbed
-  - pymdownx.details
-
-plugins:
-  - search
-
-extra:
-  social:
-    - icon: fontawesome/brands/github
-      link: https://github.com/yourusername/AdaptivePWM
