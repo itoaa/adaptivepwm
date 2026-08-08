@@ -1,31 +1,13 @@
 /**
  * @file freertos_tasks.h
- * @brief FreeRTOS task implementations for AdaptivePWM control system
- * 
- * Supports both FreeRTOS and bare-metal operation.
- * 
- * Task Architecture:
- * ```
- * ┌─────────────────────────────────────────────────────────────┐
- * │                      FreeRTOS Kernel                        │
- * ├─────────────────────────────────────────────────────────────┤
- * │ Priority 4 │ Task_Safety     │ 100Hz │ Emergency monitoring │
- * │ Priority 3 │ Task_Measurement│ 1kHz  │ ADC sampling         │
- * │ Priority 2 │ Task_Control    │ 100Hz │ PWM control loop     │
- * │ Priority 1 │ Task_CLI        │ 50Hz  │ Command interface    │
- * └─────────────────────────────────────────────────────────────┘
- * ```
- * 
- * Security Updates:
- * - PWM-ARCH-001: Increased stack sizes (RTOS-001 CRITICAL)
- * - PWM-ARCH-001: Added stack overflow detection (RTOS-002 MAJOR)
- * - PWM-ARCH-002: Fixed heap reporting for all heap schemes
- * - PWM-ARCH-005: Validated efficiency calculation
+ * @brief Runtime loops for AdaptivePWM (bare-metal superloop by default)
  *
- * Architecture:
- * - See docs/architecture/module-deps.md for task dependencies
- * - See docs/architecture/data-flow.md for data flow
- * - See docs/architecture/state-machines.md for task states
+ * Without USE_FREERTOS, Tasks_StartScheduler() runs a cooperative superloop:
+ *   measure ~1 kHz, control ~100 Hz (Vout PID), safety ~100 Hz, CLI ~50 Hz.
+ *
+ * With USE_FREERTOS, the same Loop_* bodies run as FreeRTOS tasks.
+ *
+ * See docs/design.md and docs/api.md.
  */
 
 #ifndef FREERTOS_TASKS_H

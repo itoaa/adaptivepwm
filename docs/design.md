@@ -1,242 +1,228 @@
-# AdaptivePWM Design Document
+# AdaptivePWM — Design
 
-## System Architecture
+**Version:** 2.5.x (bring-up)  
+**MCU:** STM32F401RE @ 84 MHz (NUCLEO-F401RE)  
+**Källträd:** `App/`, `Core/`, `config/`  
+**Status:** se [MATURITY.md](../MATURITY.md)
 
-### Overview
-AdaptivePWM is a real-time control system for buck/boost converters and electronic speed controllers (ESCs). It uses an STM32F401RE microcontroller running at 84 MHz with optimized clock configuration.
+## 1. Syfte
 
-## Clock System Design
+Realtids **PWM-styrning** av buck/boost-liknande effektsteg:
 
-### Clock Tree (16MHz HSE)
+- Mäta Vin, Vout, ström, temperatur  
+- Styra TIM1-PWM med säkra duty-gränser  
+- **Reglera Vout** mot setpoint (PID) i bring-up  
+- Hålla safe operating area (ström/spänning/temp) med mjuk fault-latch  
+- Lab-CLI över UART  
 
+Sekundärt (av default): L/C/ESR från switch-ripple, η-baserad duty, security-profil.
+
+---
+
+## 2. Systemöversikt
+
+```text
+                    ┌──────────────────────────────────────┐
+                    │           main() init                │
+                    │  clock, WDG, PWM/ADC/UART, CLI banner│
+                    └──────────────────┬───────────────────┘
+                                       │
+                                       ▼
+                    ┌──────────────────────────────────────┐
+                    │   Bare-metal superloop (default)     │
+                    │   Tasks_StartScheduler()             │
+                    │                                      │
+                    │  ~1 kHz  Loop_Measure                │
+                    │  ~100 Hz Loop_Control  (Vout PID)    │
+                    │  ~100 Hz Loop_Safety   (limits)      │
+                    │  ~50 Hz  Loop_CLI      (commands)    │
+                    └──────────────────────────────────────┘
+                          │              │
+          ┌───────────────┼──────────────┼───────────────┐
+          ▼               ▼              ▼               ▼
+     ADC1+DMA          TIM1 PWM      IWDG + latch      USART2
+     Vin Vout I T      dead-time     emergency stop    CLI RX buffer
 ```
-                    ┌─────────────────────────────────────┐
-                    │           16 MHz HSE                │
-                    │     (External Crystal)              │
-                    └──────────────┬──────────────────────┘
-                                   │
-                                   ▼
-                    ┌─────────────────────────────────────┐
-                    │              PLL                    │
-                    │  ┌─────────────────────────────┐  │
-                    │  │  PLLM = 16  → VCO in = 1 MHz │  │
-                    │  │  PLLN = 336 → VCO out = 336  │  │
-                    │  │  PLLP = 4   → SYSCLK = 84    │  │
-                    │  │  PLLQ = 7   → USB = 48 MHz  │  │
-                    │  └─────────────────────────────┘  │
-                    └──────────────┬──────────────────────┘
-                                   │
-                    ┌──────────────┼──────────────┐
-                    │              │              │
-                    ▼              ▼              ▼
-            ┌──────────┐   ┌──────────┐   ┌──────────┐
-            │   AHB    │   │   APB1   │   │   APB2   │
-            │  84 MHz  │   │  42 MHz  │   │  84 MHz  │
-            │  (HCLK)  │   │ (PCLK1)  │   │ (PCLK2)  │
-            └────┬─────┘   └────┬─────┘   └────┬─────┘
-                 │              │              │
-                 │              │              │
-                 ▼              ▼              ▼
-            ┌──────────┐   ┌──────────┐   ┌──────────┐
-            │  Flash   │   │   ADC    │   │   TIM1   │
-            │   RAM    │   │  (42MHz) │   │  (84MHz) │
-            │   DMA    │   │   UART   │   │   SPI1   │
-            │          │   │  TIM2-5  │   │          │
-            └──────────┘   └──────────┘   └──────────┘
+
+**Default runtime är inte FreeRTOS.** Filen `freertos_tasks.c` kör en **kooperativ superloop** när `USE_FREERTOS` inte är definierad (CI/CubeIDE-bygget). FreeRTOS-path finns som villkorlig kod om flaggan sätts senare.
+
+---
+
+## 3. Klocka
+
+| Parameter | Värde |
+|-----------|--------|
+| HSE | 16 MHz (extern) |
+| PLL | M=16, N=336, P=4, Q=7 |
+| SYSCLK / HCLK | 84 MHz |
+| PCLK1 (APB1) | 42 MHz — UART, IWDG-relaterat |
+| PCLK2 (APB2) | 84 MHz — TIM1, ADC-klocka |
+| ADC-klocka | PCLK2/2 = 42 MHz |
+| PWM TIM1 | 84 MHz timer-klocka, typiskt **20 kHz** PWM (`PWM_FREQUENCY_HZ`) |
+
+Konfiguration: `App/Src/main.c` → `SystemClock_Config()`, konstanter i `App/Inc/config.h`.
+
+---
+
+## 4. Dataflöde (bring-up)
+
+```text
+DMA complete (ISR flag)
+        │
+        ▼
+Loop_Measure
+  Adaptive_ADC_ProcessBuffer()     // rå → Vin/Vout/I/T + filter
+  ParamCalc_AddSample / CalculateAll
+        │  averages_valid (L/C endast om FEATURE_SWITCH_RIPPLE_ESTIMATION)
+        ▼
+Loop_Control  (om PWM running, ej fault, FEATURE_VOUT_CONTROL)
+  mät Vout (medel)
+  PID_Compute(setpoint, Vout, dt) → duty
+  Adaptive_PWM_SetDuty()           // ramp + soft/hard limits
+        │
+Loop_Safety
+  OV / OC / OT / (valfri UV)
+  vid fel: EmergencyStop + latch
+  soft recovery efter cooldown (PWM startas manuellt igen)
+        │
+Loop_CLI
+  läs färdig UART-rad (ej tungt i IRQ)
+  CLI_ProcessCommand()
+  async monitor-rader
 ```
 
-### Clock Configuration Details
+### UART / IRQ-regel
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| HSE | 16 MHz | External crystal oscillator |
-| PLLM | 16 | VCO input prescaler (16MHz/16 = 1MHz) |
-| PLLN | 336 | VCO multiplier (1MHz × 336 = 336MHz) |
-| PLLP | 4 | System clock divider (336/4 = 84MHz) |
-| PLLQ | 7 | USB clock divider (336/7 = 48MHz) |
-| SYSCLK | 84 MHz | Maximum CPU frequency |
-| HCLK | 84 MHz | AHB bus clock |
-| PCLK1 | 42 MHz | APB1 bus (max allowed) |
-| PCLK2 | 84 MHz | APB2 bus (full speed) |
+- **ISR:** endast RX-buffer (`Adaptive_UART_ProcessRX`).  
+- **CLI / monitor / printf:** i superloop — aldrig blockera i avbrott.
 
-### Peripheral Clock Distribution
+---
 
-| Peripheral | Bus | Clock | Max Frequency |
-|------------|-----|-------|---------------|
-| TIM1 (PWM) | APB2 | 84 MHz | 84 MHz |
-| TIM2-5 | APB1 | 42 MHz | 42 MHz |
-| ADC1 | APB2 | 42 MHz | 42 MHz |
-| USART1 | APB2 | 84 MHz | 84 MHz |
-| USART2 | APB1 | 42 MHz | 42 MHz |
-| SPI1 | APB2 | 84 MHz | 84 MHz |
-| SPI2-3 | APB1 | 42 MHz | 42 MHz |
-| I2C1-3 | APB1 | 42 MHz | 42 MHz |
+## 5. Reglering
 
-## ADC Design
+### 5.1 Primär: Vout-PID (`FEATURE_VOUT_CONTROL=1`)
 
-### ADC Clock Optimization
+| Parameter | Källa |
+|-----------|--------|
+| Setpoint | `VOUT_SETPOINT_DEFAULT_V` / `Tasks_SetVoutSetpoint()` / CLI `config vout` |
+| Mätning | filtrerad `meas.vout` |
+| Utgång | duty ∈ soft min…max |
+| PID-state | per-instans (`d_filtered` i struct) |
 
-The ADC clock is derived from PCLK2 (84 MHz) divided by 2:
-- **ADC Clock = 42 MHz** (maximum allowed for 12-bit resolution)
+Gains: `DUTY_KP/KI/KD`, setpoint weight, derivative filter i `config.h`.
 
-### Sampling Time Configuration
+### 5.2 Avstängt som default
 
-| Channel | Signal | Sampling Time | Conversion Time | Use Case |
-|---------|--------|---------------|-----------------|----------|
-| 0 | Vin | 3 cycles | 357 ns | Fast voltage |
-| 1 | Vout | 3 cycles | 357 ns | Fast voltage |
-| 2 | Current | 15 cycles | 643 ns | Current sense |
-| 3 | Temperature | 28 cycles | 952 ns | Slow signal |
+| Mode | Flagga | Kommentar |
+|------|--------|-----------|
+| η → duty | `FEATURE_EFFICIENCY_CONTROL` | Kräver giltig Pin/Pout; nuvarande en-ströms-skattning är otillräcklig |
+| L/C/ESR | `FEATURE_SWITCH_RIPPLE_ESTIMATION` | Kräver sampling ≫ 20 kHz; host-path ~1 kHz räcker inte |
 
-**Total cycle time:** 3+3+15+28 + 4×12 = 82 cycles @ 42 MHz = **1.95 µs**
+### 5.3 Open-loop
 
-**Maximum sampling rate:** ~500 kHz (4 channels)
+Om båda control-flaggor är 0: duty styrs bara via CLI (`pwm <%>`).
 
-### ADC Resolution vs Clock
+---
 
-| Resolution | Max ADC Clock | Min Cycles | Max Sample Rate @ 42MHz |
-|------------|---------------|------------|-------------------------|
-| 12-bit | 36 MHz | 12 cycles | 3.5 MSPS |
-| 10-bit | 42 MHz | 10 cycles | 4.2 MSPS |
-| 8-bit | 42 MHz | 8 cycles | 5.25 MSPS |
-| 6-bit | 42 MHz | 6 cycles | 7 MSPS |
+## 6. Mätning (ADC)
 
-We use 12-bit with 42 MHz clock (slightly overclocked but stable).
+| Kanal | Signal | Typisk pin (Nucleo-layout) |
+|-------|--------|----------------------------|
+| 0 | Vin | PA0 |
+| 1 | Vout | PA1 |
+| 2 | Current | PA2 |
+| 3 | Temp | PA3 |
 
-## PWM Design
+- **DMA** cirkulär buffer → process i `Loop_Measure`.  
+- Filter: moving average + IIR (konfigurerbart).  
+- **Skalning** (bring-up default = 1.0 för pin-volt-domän):
 
-### TIM1 Configuration
+```text
+V_actual = V_adc_pin × ADC_VIN_DIVIDER_RATIO   (motsv. Vout)
+I_actual = V_adc_pin / ADC_CURRENT_V_PER_AMP
+```
 
-- **Timer Clock:** 84 MHz (APB2)
-- **Frequency:** 20 kHz
-- **ARR Value:** 4199 (84MHz/20kHz - 1)
-- **Resolution:** 4200 steps (~12-bit equivalent)
-- **Dead-time:** 400 ns
+Justera i `App/Inc/config.h` eller via kalibrerings-API för er power-board.
 
-### PWM Timing
+---
 
-| Parameter | Value | Calculation |
-|-----------|-------|-------------|
-| Period | 50 µs | 1/20 kHz |
-| Tick duration | 11.9 ns | 1/84 MHz |
-| ARR | 4199 | 84M/20k - 1 |
-| Dead-time ticks | 34 | 400ns / 11.9ns |
-| Minimum duty | 2% | 84 ticks |
-| Maximum duty | 98% | 4115 ticks |
+## 7. PWM
 
-## Control Loop Timing
+| Egenskap | Design |
+|----------|--------|
+| Timer | TIM1 complementary-capable |
+| Frekvens | `PWM_FREQUENCY_HZ` (20 kHz) |
+| Duty soft | 5–95 % typiskt |
+| Duty hard | 2–98 % |
+| Ramp | `PWM_RAMP_RATE_PER_SEC` |
+| Dead-time | `PWM_DEAD_TIME_NS` |
+| Nödstopp | break / `Adaptive_PWM_EmergencyStop` |
 
-### Task Scheduling
+---
 
-| Task | Frequency | Period | Priority |
-|------|-----------|--------|----------|
-| Safety Monitor | 1 kHz | 1 ms | Highest |
-| ADC Processing | 1 kHz | 1 ms | High |
-| Control Loop | 100 Hz | 10 ms | Medium |
-| CLI Handler | 50 Hz | 20 ms | Low |
+## 8. Safety
 
-### ADC to PWM Latency
+| Lager | Beteende |
+|-------|----------|
+| Gränser | `CURRENT_MAX_A`, `VOLTAGE_MAX_V`, `TEMP_SHUTDOWN_C`, … |
+| VIN UV | `SAFETY_VIN_UV_ENABLE` (default **0** i lab) |
+| Vout UV | först efter `SAFETY_VOUT_UV_ENABLE_MS` med PWM igång |
+| Fault | latch + PWM stop — **ingen** oändlig hang med IRQ av |
+| Recovery | `FEATURE_SOFT_FAULT_RECOVERY`: friska mätvärden + cooldown; `pwm clear` / `pwm start` |
 
-| Stage | Time | Notes |
-|-------|------|-------|
-| ADC Sampling | 1.95 µs | All 4 channels |
-| DMA Transfer | <1 µs | Hardware |
-| Processing | 10-50 µs | Software filter |
-| PWM Update | <1 µs | Register write |
-| **Total** | **~50 µs** | **<1% of PWM period** |
+Enhanced safety / fault history-moduler finns i kod; den **aktiva** bring-up-vägen är superloopens `Loop_Safety`.
 
-## Memory Map
+Watchdog (IWDG) initieras tidigt; refresh i superloop (och SysTick i main).
 
-### Flash Layout
+---
 
-| Address | Size | Content |
-|---------|------|---------|
-| 0x0800 0000 | 64 KB | Bootloader (optional) |
-| 0x0801 0000 | 384 KB | Application code |
-| 0x0807 0000 | 128 KB | Data logging |
+## 9. CLI (kontrakt)
 
-### RAM Layout
+| Kommando | Roll |
+|----------|------|
+| `help` | Lista |
+| `status` / `status adc\|pwm\|params` | Tillstånd |
+| `config features` | Feature-flaggor |
+| `config vout <V>` | Setpoint |
+| `pwm start\|stop\|clear\|<duty%>` | PWM |
+| `monitor <s>` | Async CSV (ej block i IRQ) |
+| `login` / auth | Endast om `FEATURE_CLI_AUTH` |
 
-| Address | Size | Content |
-|---------|------|---------|
-| 0x2000 0000 | 128 KB | Main RAM |
-| 0x2001 C000 | 16 KB | CCM RAM (fast) |
+Auth **av** default → alla kommandon tillgängliga i lab.
 
-## Power Consumption
+---
 
-### Clock Tree Power
+## 10. Modul-karta (kod)
 
-| Component | Frequency | Typical Current |
-|-----------|-----------|-----------------|
-| HSE | 16 MHz | ~1 mA |
-| PLL | 336 MHz VCO | ~2 mA |
-| SYSCLK | 84 MHz | ~10 mA |
-| ADC | 42 MHz | ~1.5 mA |
-| TIM1 | 84 MHz | ~0.5 mA |
-| **Total** | - | **~15 mA @ 3.3V** |
+| Mapp / fil | Ansvar |
+|------------|--------|
+| `App/Src/main.c` | Init, klocka, IRQ-handers (lätt) |
+| `App/Src/freertos_tasks.c` | Superloop + Loop_* + Vout-PID |
+| `App/Src/hal_*.c` | PWM, ADC, UART, WDG |
+| `App/Src/param_calc.c` | Medelvärden / ev. L-C |
+| `App/Src/cli_*.c` | CLI + valfri auth |
+| `App/Src/pid_controller.c` | PID |
+| `config/features.h` | Feature switches |
+| `App/Inc/config.h` | Klocka, gränser, skalning, gains |
+| `Core/` | HAL conf, MSP, syscalls, system |
+| `bootloader/` | Signerad start (ofullständig recovery) |
 
-## Performance Metrics
+---
 
-### ADC Performance
+## 11. Feature-profil
 
-- **Sample Rate:** 10 kHz per channel (40 kHz total)
-- **Resolution:** 12-bit (4096 levels)
-- **ENOB:** ~10.5 bits (estimated)
-- **SNR:** ~65 dB (estimated)
+Se `config/features.h`. Bring-up-default:
 
-### PWM Performance
+- Vout-control **på**  
+- Efficiency / switch-ripple / security-profile **av**  
+- Soft fault recovery **på**
 
-- **Frequency:** 20 kHz (fixed)
-- **Resolution:** 4200 steps (12-bit equivalent)
-- **Dead-time:** 400 ns (adjustable)
-- **Jitter:** <10 ns (hardware)
+---
 
-### Control Loop Performance
+## 12. Icke-mål i denna designrevision
 
-- **Update Rate:** 100 Hz
-- **Latency:** <100 µs (ADC to PWM)
-- **Settling Time:** <10 ms (typical)
+- Inte att FreeRTOS är default.  
+- Inte att L/C i realtid är validerat utan snabb sampling.  
+- Inte att CISSP/SIL-dokument i `docs/archive/` är implementerade end-to-end.
 
-## Safety Features
-
-### Clock Safety
-
-- **CSS (Clock Security System):** Enabled
-- **HSE failure detection:** Automatic switch to HSI
-- **PLL lock detection:** Hardware monitored
-
-### Watchdog
-
-- **Type:** Independent Watchdog (IWDG)
-- **Clock:** 32 kHz LSI
-- **Timeout:** 500 ms
-- **Refresh:** Every 100 ms
-
-## Future Optimizations
-
-### Potential Clock Improvements
-
-1. **ADC Oversampling:** Use hardware oversampling for better SNR
-2. **DMA Double Buffer:** Reduce CPU overhead
-3. **Timer Synchronization:** Sync ADC trigger with PWM
-4. **CCM RAM:** Move critical data to fast memory
-
-### Alternative Clock Configurations
-
-#### Option 1: Lower Power (48 MHz)
-- HSE: 16 MHz
-- PLL: M=16, N=192, P=4
-- SYSCLK: 48 MHz
-- Power: ~40% reduction
-
-#### Option 2: Higher Performance (100 MHz)
-- HSE: 25 MHz (requires different crystal)
-- PLL: M=25, N=400, P=4
-- SYSCLK: 100 MHz
-- Note: Requires voltage scale 1
-
-## References
-
-- STM32F401 Reference Manual (RM0368)
-- STM32F4xx HAL User Manual
-- AN4488: STM32F4 clock configuration
+När HIL är grön uppdateras [MATURITY.md](../MATURITY.md); designen ovan är det som koden faktiskt gör i 2.5 bring-up.

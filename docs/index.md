@@ -11,12 +11,12 @@
 
 | Doc | Innehåll |
 |------|----------|
-| [mål.md](mål.md) | Korta mål (L/C, safe area, eff, logg) |
-| [design.md](design.md) | System/klocka/design (detaljer kan behöva uppdateras mot superloop) |
-| [api.md](api.md) | Modul-API |
-| [safety.md](safety.md) | Säkerhetsprinciper |
+| [mål.md](mål.md) | Kärnmål vs sekundära mål |
+| [design.md](design.md) | Superloop, Vout-PID, klocka, dataflöde (**aktuell**) |
+| [api.md](api.md) | Modul-API för bring-up (**aktuell**) |
+| [safety.md](safety.md) | Säkerhetsprinciper (komplettera med design §8) |
 | [metoder.md](metoder.md) | Metoder (kort) |
-| [config/features.h](../config/features.h) | Runtime/build-featureflaggor |
+| [config/features.h](../config/features.h) | Feature-flaggor |
 
 ## Arkiv
 
