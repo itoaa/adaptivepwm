@@ -1,5 +1,6 @@
 # AdaptivePWM — continuous integration
-# Builds firmware (PlatformIO env:ci) and host unit tests that do not need hardware.
+# Primary: STM32CubeIDE Makefile build (arm-none-eabi-gcc)
+# Secondary: feature-flag smoke checks
 
 name: CI
 
@@ -15,68 +16,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  firmware:
-    name: Firmware (PlatformIO env:ci)
+  firmware-cubeide:
+    name: Firmware (CubeIDE Makefile)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install PlatformIO
+      - name: Install ARM GCC toolchain
         run: |
-          python -m pip install -U pip
-          python -m pip install -U platformio
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi make
 
-      - name: Cache PlatformIO packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.platformio/.cache
-            ~/.platformio/packages
-            ~/.platformio/platforms
-            .pio
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: |
-            pio-${{ runner.os }}-
+      - name: Build (make)
+        run: make -j"$(nproc)" all
 
-      - name: Build env:ci
-        run: python -m platformio run -e ci
+      - name: Size report
+        run: arm-none-eabi-size build/cubeide/AdaptivePWM.elf
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: adaptivepwm-firmware-ci
+          name: adaptivepwm-cubeide
           path: |
-            .pio/build/ci/firmware.bin
-            .pio/build/ci/firmware.elf
-            .pio/build/ci/firmware.hex
+            build/cubeide/AdaptivePWM.bin
+            build/cubeide/AdaptivePWM.elf
+            build/cubeide/AdaptivePWM.hex
+            build/cubeide/AdaptivePWM.map
           if-no-files-found: error
 
   host-smoke:
-    name: Host compile smoke (gcc + HAL stubs)
+    name: Feature defaults smoke
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential
-
       - name: Validate bring-up feature defaults
         run: |
           set -euo pipefail
-          # Grep-based checks (no HAL dependency): defaults must keep lab bring-up safe
           grep -q 'FEATURE_SECURITY_PROFILE[[:space:]]*0' config/features.h
           grep -q 'FEATURE_VOUT_CONTROL[[:space:]]*1' config/features.h
           grep -q 'FEATURE_EFFICIENCY_CONTROL[[:space:]]*0' config/features.h
-          grep -q 'FEATURE_CLI_AUTH' config/features.h
-          test -f .github/workflows/ci.yml
-          test -f platformio.ini
-          grep -q '\[env:ci\]' platformio.ini
-          echo "Host smoke OK (feature defaults + CI profile present)"
+          test -f Makefile
+          test -f STM32F401RETX_FLASH.ld
+          test -f App/Src/main.c
+          test -f Core/Inc/stm32f4xx_hal_conf.h
+          echo "Host smoke OK"

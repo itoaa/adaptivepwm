@@ -10,7 +10,14 @@ AdaptivePWM is a real-time control system for buck/boost converters and electron
 **Target:** STM32F401RE @ 84 MHz  
 **Clock:** 16 MHz HSE → 84 MHz SYSCLK  
 **Honest status:** [`MATURITY.md`](MATURITY.md) · **HIL:** [`docs/HIL_CHECKLIST.md`](docs/HIL_CHECKLIST.md)  
-**CI:** GitHub Actions builds PlatformIO `env:ci` on every push/PR to `main`.
+**CI:** GitHub Actions builds the **STM32CubeIDE Makefile** target on every push/PR to `main`.  
+**CubeIDE:** see [`CUBEIDE.md`](CUBEIDE.md) — sources live under `App/`, `Core/`, `Drivers/`.
+
+```bash
+# CLI build (same as CubeIDE Makefile project)
+make -j8
+# → build/cubeide/AdaptivePWM.{elf,bin,hex}
+```
 
 ### Feature profile (important)
 

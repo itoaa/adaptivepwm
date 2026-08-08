@@ -1,8 +1,23 @@
 .pio
 *.tmp
+build/
+*.o
+*.d
+*.lst
+*.map
+*.elf
+*.bin
+*.hex
+!Drivers/**/*
 
 # Private cryptographic material — never commit
 keys/*private*
 keys/*.key
 *.pem
 !keys/bootloader_public.pem
+
+# CubeIDE / Eclipse local
+.settings/
+.metadata/
+RemoteSystemsTempFiles/
+*.launch
