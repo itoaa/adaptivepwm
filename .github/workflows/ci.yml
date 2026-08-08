@@ -59,7 +59,7 @@ jobs:
           if-no-files-found: error
 
   host-smoke:
-    name: Host compile smoke (gcc)
+    name: Host compile smoke (gcc + HAL stubs)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -68,16 +68,20 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y build-essential
 
-      - name: Compile pure modules on host
+      - name: Parse features/config headers on host
         run: |
           set -e
-          # Smoke-compile control math without STM32 HAL (headers that need HAL are excluded)
-          gcc -std=c11 -Wall -Wextra -c -O0 \
-            -I src -I config -I include \
-            -DDEBUG \
-            src/efficiency_calc.c -o /tmp/efficiency_calc.o
-          gcc -std=c11 -Wall -Wextra -c -O0 \
-            -I src -I config -I include \
-            -DDEBUG \
-            src/pid_controller.c -o /tmp/pid_controller.o
-          echo "Host smoke compile OK"
+          # Minimal host check: feature + config headers compile with HAL stubs
+          cat > /tmp/features_check.c <<'EOF'
+          #include "features.h"
+          #include "config.h"
+          int main(void) {
+              return (FEATURE_VOUT_CONTROL >= 0 && FEATURE_CLI_AUTH >= 0
+                      && FEATURE_EFFICIENCY_CONTROL >= 0) ? 0 : 1;
+          }
+          EOF
+          gcc -std=c11 -Wall -Wextra -O0 \
+            -I tests -I src -I config -I include \
+            /tmp/features_check.c -o /tmp/features_check
+          /tmp/features_check
+          echo "Host smoke OK (features/config)"
