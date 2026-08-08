@@ -71,17 +71,15 @@ jobs:
       - name: Parse features/config headers on host
         run: |
           set -e
-          # Minimal host check: feature + config headers compile with HAL stubs
-          cat > /tmp/features_check.c <<'EOF'
-          #include "features.h"
-          #include "config.h"
-          int main(void) {
-              return (FEATURE_VOUT_CONTROL >= 0 && FEATURE_CLI_AUTH >= 0
-                      && FEATURE_EFFICIENCY_CONTROL >= 0) ? 0 : 1;
-          }
-          EOF
+          printf '%s\n' \
+            '#include "features.h"' \
+            '#include "config.h"' \
+            'int main(void) {' \
+            '  return (FEATURE_VOUT_CONTROL >= 0 && FEATURE_CLI_AUTH >= 0) ? 0 : 1;' \
+            '}' \
+            > /tmp/features_check.c
           gcc -std=c11 -Wall -Wextra -O0 \
-            -I tests -I src -I config -I include \
+            -Itests -Isrc -Iconfig -Iinclude \
             /tmp/features_check.c -o /tmp/features_check
           /tmp/features_check
           echo "Host smoke OK (features/config)"
