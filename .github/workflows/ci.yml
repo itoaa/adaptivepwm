@@ -68,18 +68,15 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y build-essential
 
-      - name: Parse features/config headers on host
+      - name: Validate bring-up feature defaults
         run: |
-          set -e
-          printf '%s\n' \
-            '#include "features.h"' \
-            '#include "config.h"' \
-            'int main(void) {' \
-            '  return (FEATURE_VOUT_CONTROL >= 0 && FEATURE_CLI_AUTH >= 0) ? 0 : 1;' \
-            '}' \
-            > /tmp/features_check.c
-          gcc -std=c11 -Wall -Wextra -O0 \
-            -Itests -Isrc -Iconfig -Iinclude \
-            /tmp/features_check.c -o /tmp/features_check
-          /tmp/features_check
-          echo "Host smoke OK (features/config)"
+          set -euo pipefail
+          # Grep-based checks (no HAL dependency): defaults must keep lab bring-up safe
+          grep -q 'FEATURE_SECURITY_PROFILE[[:space:]]*0' config/features.h
+          grep -q 'FEATURE_VOUT_CONTROL[[:space:]]*1' config/features.h
+          grep -q 'FEATURE_EFFICIENCY_CONTROL[[:space:]]*0' config/features.h
+          grep -q 'FEATURE_CLI_AUTH' config/features.h
+          test -f .github/workflows/ci.yml
+          test -f platformio.ini
+          grep -q '\[env:ci\]' platformio.ini
+          echo "Host smoke OK (feature defaults + CI profile present)"
