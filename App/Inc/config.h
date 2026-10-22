@@ -260,21 +260,34 @@
 #define TARGET_EFFICIENCY           0.95f
 #define EFFICIENCY_MIN_ACCEPTABLE   0.85f
 
-// Control loop gains (Vout PID / duty)
+// PID trim gains (duty per volt). The ideal duty comes from feedforward;
+// these gains only correct losses and load error around that duty.
 #define DUTY_KP                     0.05f
 #define DUTY_KI                     0.01f
 #define DUTY_KD                     0.001f
 
-// Setpoint weighting - reduces overshoot while maintaining speed
-#define PID_SETPOINT_WEIGHT         0.7f        // 0-1, lower = less overshoot
+// Trim PID uses the full error so output is ~0 when Vout is at the setpoint.
+#define PID_SETPOINT_WEIGHT         1.0f
 
 // Derivative filter - smooths derivative term
 #define PID_DERIVATIVE_FILTER       0.1f        // 0-1, higher = more filtering
 
-// Feedforward for buck/boost converters
-// D_estimated = Vout / Vin for buck, 1 - Vout/Vin for boost
+// Maximum |duty| the PID may add on top of feedforward.
+#define PID_TRIM_MAX                0.15f
+
+/*
+ * Feedforward duty from the chosen topology (ConverterTopology_t values):
+ *   0 buck:       D = Vout_setpoint / Vin
+ *   1 boost:      D = 1 - Vin / Vout_setpoint
+ *   2 buck-boost: D = Vout_setpoint / (Vout_setpoint + Vin)
+ * GAIN is 1.0 so the computed duty is applied in full. The PID adds a trim.
+ */
 #define FEEDFORWARD_ENABLED         1
-#define FEEDFORWARD_GAIN            0.5f        // Blend factor (0-1)
+#define FEEDFORWARD_GAIN            1.0f
+#define FEEDFORWARD_VIN_MIN_V       0.05f
+#ifndef CONVERTER_TOPOLOGY
+#define CONVERTER_TOPOLOGY          0
+#endif
 
 // PID Controller Structure with Anti-Windup
 typedef struct {

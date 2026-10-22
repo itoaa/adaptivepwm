@@ -72,6 +72,17 @@ typedef struct {
 bool Adaptive_ADC_Init(Adaptive_ADC_t* adc);
 
 /**
+ * @brief Arm the ADC analog watchdog on the current-sense channel.
+ *
+ * STM32F401 has no comparator. The watchdog is the on-chip hardware
+ * threshold: it interrupts when the raw current conversion leaves
+ * [0, counts(CURRENT_MAX_A)] without waiting for the control loop.
+ * If CURRENT_MAX_A is above the pin's full-scale amps, the high
+ * threshold sits at full scale and a legal conversion cannot trip.
+ */
+bool Adaptive_ADC_ArmOvercurrentWatchdog(Adaptive_ADC_t* adc);
+
+/**
  * @brief Start ADC conversions in DMA mode
  * @param adc Pointer to initialized ADC handle
  * @return true on success, false on failure

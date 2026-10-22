@@ -127,6 +127,10 @@ bool Adaptive_ADC_Init(Adaptive_ADC_t* adc)
     HAL_ADC_ConfigChannel(&adc->hadc, &sConfig);
     
     ADC_DMA_Init(adc);
+
+    if (!Adaptive_ADC_ArmOvercurrentWatchdog(adc)) {
+        return false;
+    }
     
     // Initialize moving average buffer
 #if ADC_FILTER_MOVING_AVG_ENABLED
@@ -134,6 +138,51 @@ bool Adaptive_ADC_Init(Adaptive_ADC_t* adc)
     moving_avg_index = 0;
 #endif
     
+    return true;
+}
+
+bool Adaptive_ADC_ArmOvercurrentWatchdog(Adaptive_ADC_t* adc)
+{
+    float v_per_a;
+    float full_scale_a;
+    float counts;
+    ADC_AnalogWDGConfTypeDef awd = {0};
+
+    if (adc == NULL) {
+        return false;
+    }
+
+    v_per_a = ADC_CURRENT_V_PER_AMP;
+    if (v_per_a < 1e-6f) {
+        v_per_a = 1e-6f;
+    }
+    full_scale_a = (ADC_VREF_MV / 1000.0f) / v_per_a;
+    if (CURRENT_MAX_A < full_scale_a) {
+        counts = (CURRENT_MAX_A / full_scale_a) * 4095.0f;
+    } else {
+        /* Limit is above anything the pin can measure. */
+        counts = 4095.0f;
+    }
+    if (counts < 1.0f) {
+        counts = 1.0f;
+    }
+    if (counts > 4095.0f) {
+        counts = 4095.0f;
+    }
+
+    awd.WatchdogMode = ADC_ANALOGWATCHDOG_SINGLE_REG;
+    awd.HighThreshold = (uint32_t)(counts + 0.5f);
+    awd.LowThreshold = 0U;
+    awd.Channel = ADC_CHANNEL_CURRENT;
+    awd.ITMode = ENABLE;
+    awd.WatchdogNumber = 0U;
+
+    if (HAL_ADC_AnalogWDGConfig(&adc->hadc, &awd) != HAL_OK) {
+        return false;
+    }
+
+    HAL_NVIC_SetPriority(ADC_IRQn, 1, 0);
+    HAL_NVIC_EnableIRQ(ADC_IRQn);
     return true;
 }
 
