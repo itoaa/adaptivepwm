@@ -33,7 +33,7 @@ Sekundärt (av default): L/C/ESR från switch-ripple, η-baserad duty, security-
                     │   Tasks_StartScheduler()             │
                     │                                      │
                     │  ~1 kHz  Loop_Measure                │
-                    │  ~100 Hz Loop_Control  (Vout PID)    │
+                    │  ~100 Hz Loop_Control  (Vout FF+trim)│
                     │  ~100 Hz Loop_Safety   (limits)      │
                     │  ~50 Hz  Loop_CLI      (commands)    │
                     └──────────────────────────────────────┘
@@ -41,7 +41,7 @@ Sekundärt (av default): L/C/ESR från switch-ripple, η-baserad duty, security-
           ┌───────────────┼──────────────┼───────────────┐
           ▼               ▼              ▼               ▼
      ADC1+DMA          TIM1 PWM      IWDG + latch      USART2
-     Vin Vout I T      dead-time     emergency stop    CLI RX buffer
+     Vin Vout          dead-time     BKIN + watchdog   PA2/PA3 (tar I/T)
 ```
 
 **Default runtime är inte FreeRTOS.** Filen `freertos_tasks.c` kör en **kooperativ superloop** när `USE_FREERTOS` inte är definierad (CI/CubeIDE-bygget). FreeRTOS-path finns som villkorlig kod om flaggan sätts senare.
@@ -100,16 +100,17 @@ Loop_CLI
 
 ## 5. Reglering
 
-### 5.1 Primär: Vout-PID (`FEATURE_VOUT_CONTROL=1`)
+### 5.1 Primär: feedforward + PID-trim (`FEATURE_VOUT_CONTROL=1`)
 
-| Parameter | Källa |
-|-----------|--------|
-| Setpoint | `VOUT_SETPOINT_DEFAULT_V` / `Tasks_SetVoutSetpoint()` / CLI `config vout` |
-| Mätning | filtrerad `meas.vout` |
-| Utgång | duty ∈ soft min…max |
-| PID-state | per-instans (`d_filtered` i struct) |
+Ideal duty från uppmätt Vin och Vout-börvärdet. PID:en lägger bara till en begränsad trim (`PID_TRIM_MAX`, ±15 %). Summan skrivs med `SetDutyImmediate` så CLI-rampen inte slew:ar regulatorn.
 
-Gains: `DUTY_KP/KI/KD`, setpoint weight, derivative filter i `config.h`.
+| Topologi | `CONVERTER_TOPOLOGY` | Duty |
+|----------|----------------------|------|
+| Buck (default) | 0 | `Vout_sp / Vin` |
+| Boost | 1 | `1 - Vin / Vout_sp` |
+| Buck-boost | 2 | `Vout_sp / (Vout_sp + Vin)` |
+
+`FEEDFORWARD_GAIN` är 1,0. Vin under `FEEDFORWARD_VIN_MIN_V` ger soft-min duty. PID-gains: `DUTY_KP/KI/KD`. Setpoint: `VOUT_SETPOINT_DEFAULT_V`, `config vout`, `Tasks_SetVoutSetpoint()`.
 
 ### 5.2 Avstängt som default
 
@@ -128,10 +129,10 @@ Om båda control-flaggor är 0: duty styrs bara via CLI (`pwm <%>`).
 
 | Kanal | Signal | Typisk pin (Nucleo-layout) |
 |-------|--------|----------------------------|
-| 0 | Vin | PA0 |
-| 1 | Vout | PA1 |
-| 2 | Current | PA2 |
-| 3 | Temp | PA3 |
+| 0 | Vin | PA0 | Analog kvar efter boot |
+| 1 | Vout | PA1 | Analog kvar efter boot |
+| 2 | Current | PA2 | **Tas av USART2_TX** när CLI initieras |
+| 3 | Temp | PA3 | **Tas av USART2_RX** när CLI initieras |
 
 - **DMA** cirkulär buffer → process i `Loop_Measure`.  
 - Filter: moving average + IIR (konfigurerbart).  
@@ -144,19 +145,23 @@ I_actual = V_adc_pin / ADC_CURRENT_V_PER_AMP
 
 Justera i `App/Inc/config.h` eller via kalibrerings-API för er power-board.
 
+På NUCLEO-F401RE är PA2/PA3 ST-Link-serieporten. `Adaptive_UART_Init` körs efter ADC och ställer om de pinnarna till AF. Ström- och tempkanalerna är då inte analoga, och ADC-watchdogen på kanal 2 ser inte en shunt. För ett strömtest: flytta shunt/NTC till andra ADC-kanaler, eller flytta CLI från USART2. Vin/Vout (PA0/PA1), PWM (PA8/PA9) och BKIN (PA6) krockar inte med VCP.
+
 ---
 
 ## 7. PWM
 
 | Egenskap | Design |
 |----------|--------|
-| Timer | TIM1 complementary-capable |
+| Timer | TIM1 komplementär |
+| Pinnar | PA8 CH1, PA9 CH1N |
 | Frekvens | `PWM_FREQUENCY_HZ` (20 kHz) |
-| Duty soft | 5–95 % typiskt |
+| Duty soft | 5–95 % |
 | Duty hard | 2–98 % |
-| Ramp | `PWM_RAMP_RATE_PER_SEC` |
-| Dead-time | `PWM_DEAD_TIME_NS` |
-| Nödstopp | break / `Adaptive_PWM_EmergencyStop` |
+| Ramp | Bara CLI `SetDuty` (`PWM_RAMP_RATE_PER_SEC`). Regulatorn använder `SetDutyImmediate` |
+| Dead-time | `PWM_DEAD_TIME_NS` (400 ns) |
+| BKIN | PA6, AF1, aktiv låg, intern pull-up. Extern komparator drar ner. GPIO sätts innan break-IRQ |
+| Nödstopp | break-händelse eller `Adaptive_PWM_EmergencyStop` |
 
 ---
 
@@ -164,7 +169,8 @@ Justera i `App/Inc/config.h` eller via kalibrerings-API för er power-board.
 
 | Lager | Beteende |
 |-------|----------|
-| Gränser | `CURRENT_MAX_A`, `VOLTAGE_MAX_V`, `TEMP_SHUTDOWN_C`, … |
+| Överström | Inte i 100 Hz-loopen. TIM1 BKIN (cykelvis, extern komparator) och ADC-watchdog på strömkanalen. Watchdog-tröskeln följer `CURRENT_MAX_A` och ryms inte i labbdefault 10 A @ 1 V/A |
+| Övriga gränser | `VOLTAGE_MAX_V`, `TEMP_SHUTDOWN_C` i `Loop_Safety` |
 | VIN UV | `SAFETY_VIN_UV_ENABLE` (default **0** i lab) |
 | Vout UV | först efter `SAFETY_VOUT_UV_ENABLE_MS` med PWM igång |
 | Fault | latch + PWM stop — **ingen** oändlig hang med IRQ av |
@@ -197,7 +203,7 @@ Auth **av** default → alla kommandon tillgängliga i lab.
 | Mapp / fil | Ansvar |
 |------------|--------|
 | `App/Src/main.c` | Init, klocka, IRQ-handers (lätt) |
-| `App/Src/freertos_tasks.c` | Superloop + Loop_* + Vout-PID |
+| `App/Src/freertos_tasks.c` | Superloop + Loop_* + Vout-feedforward |
 | `App/Src/hal_*.c` | PWM, ADC, UART, WDG |
 | `App/Src/param_calc.c` | Medelvärden / ev. L-C |
 | `App/Src/cli_*.c` | CLI + valfri auth |

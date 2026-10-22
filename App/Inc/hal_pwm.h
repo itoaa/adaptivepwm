@@ -165,7 +165,10 @@ void Adaptive_PWM_EnableFeedforward(Adaptive_PWM_t* pwm, bool enable);
  * @param vin Input voltage
  * @param vout Output voltage
  * @param is_buck true for buck, false for boost
- * @return Calculated feedforward duty cycle (0.0 - 1.0)
+ * @return Duty clamped to the soft limits (PWM_SOFT_MIN_DUTY … PWM_SOFT_MAX_DUTY).
+ *
+ * The voltage loop does not read Adaptive_PWM_t.feedforward_enabled.
+ * It uses FEEDFORWARD_ENABLED, FEEDFORWARD_GAIN and CONVERTER_TOPOLOGY.
  */
 float Adaptive_PWM_CalculateFeedforward(float vin, float vout, bool is_buck);
 

@@ -3,7 +3,8 @@
  * @brief Runtime loops for AdaptivePWM (bare-metal superloop by default)
  *
  * Without USE_FREERTOS, Tasks_StartScheduler() runs a cooperative superloop:
- *   measure ~1 kHz, control ~100 Hz (Vout PID), safety ~100 Hz, CLI ~50 Hz.
+ *   measure ~1 kHz, control ~100 Hz (Vout feedforward + PID trim),
+ *   safety ~100 Hz, CLI ~50 Hz.
  *
  * With USE_FREERTOS, the same Loop_* bodies run as FreeRTOS tasks.
  *

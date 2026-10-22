@@ -38,9 +38,16 @@ static void PWM_GPIO_Init(void)
     GPIO_InitStruct.Alternate = PWM_GPIO_AF;
     HAL_GPIO_Init(PWM_GPIO_PORT, &GPIO_InitStruct);
     
-    // Configure fault input (PA12 - TIM1_BKIN) for emergency stop
-    GPIO_InitStruct.Pin = GPIO_PIN_12;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    /*
+     * TIM1_BKIN is PA6 (AF1) on STM32F401. PA12 is TIM1_ETR / USB D+, not BKIN.
+     * Active-low break, internal pull-up: an external overcurrent comparator
+     * pulls the pin down and the timer hardware drops the PWM outputs.
+     * Unconnected, the pull-up keeps break inactive.
+     */
+    GPIO_InitStruct.Pin = GPIO_PIN_6;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     GPIO_InitStruct.Alternate = GPIO_AF1_TIM1;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 }
@@ -93,14 +100,22 @@ bool Adaptive_PWM_Init(Adaptive_PWM_t* pwm)
     sBreakDeadTime.DeadTime = NS_TO_TICKS(PWM_DEAD_TIME_NS);
     sBreakDeadTime.BreakState = TIM_BREAK_ENABLE;
     sBreakDeadTime.BreakPolarity = TIM_BREAKPOLARITY_LOW;
+    sBreakDeadTime.BreakFilter = 4; /* ignore short glitches on BKIN */
     sBreakDeadTime.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
     
     if (HAL_TIMEx_ConfigBreakDeadTime(&pwm->htim, &sBreakDeadTime) != HAL_OK) {
         DEBUG_PRINT("PWM: HAL_TIMEx_ConfigBreakDeadTime failed");
         return false;
     }
-    
+
+    /* Pull BKIN high before the break IRQ is unmasked. */
     PWM_GPIO_Init();
+    __HAL_TIM_CLEAR_FLAG(&pwm->htim, TIM_FLAG_BREAK);
+
+    /* Break event is hardware; the IRQ only latches the fault for the CLI. */
+    __HAL_TIM_ENABLE_IT(&pwm->htim, TIM_IT_BREAK);
+    HAL_NVIC_SetPriority(TIM1_BRK_TIM9_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(TIM1_BRK_TIM9_IRQn);
     
     pwm->period = pwm->htim.Init.Period;
     pwm->frequency = PWM_FREQUENCY_HZ;
@@ -345,13 +360,28 @@ void Adaptive_PWM_EnableFeedforward(Adaptive_PWM_t* pwm, bool enable)
 
 float Adaptive_PWM_CalculateFeedforward(float vin, float vout, bool is_buck)
 {
-    if (vin <= 0.0f) return 0.5f;
-    
-    if (is_buck) {
-        // Buck: D = Vout / Vin
-        return vout / vin;
-    } else {
-        // Boost: D = 1 - (Vin / Vout)
-        return 1.0f - (vin / vout);
+    float duty;
+
+    if (vin < FEEDFORWARD_VIN_MIN_V) {
+        return PWM_SOFT_MIN_DUTY;
     }
+
+    if (is_buck) {
+        /* Buck: D = Vout / Vin */
+        duty = vout / vin;
+    } else {
+        /* Boost: D = 1 - (Vin / Vout) */
+        if (vout < FEEDFORWARD_VIN_MIN_V) {
+            return PWM_SOFT_MIN_DUTY;
+        }
+        duty = 1.0f - (vin / vout);
+    }
+
+    if (duty < PWM_SOFT_MIN_DUTY) {
+        duty = PWM_SOFT_MIN_DUTY;
+    }
+    if (duty > PWM_SOFT_MAX_DUTY) {
+        duty = PWM_SOFT_MAX_DUTY;
+    }
+    return duty;
 }

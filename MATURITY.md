@@ -1,6 +1,6 @@
 # AdaptivePWM — mognadsmatris
 
-**Senast uppdaterad:** 2026-08-08  
+**Senast uppdaterad:** 2026-10-22  
 **Default-profil:** bring-up (`config/features.h`, `FEATURE_SECURITY_PROFILE=0`)  
 **Bygge:** Makefile / CubeIDE → `build/cubeide/AdaptivePWM.elf`
 
@@ -23,7 +23,7 @@ Detta dokument är **release-sanning**. Historiska “100 % klart”-dokument li
 | PWM TIM1 + dead-time | ✓ | ✓ | delvis | ☐ | ☐ | |
 | ADC Vin/Vout/I/Temp + filter | ✓ | ✓ | delvis | ☐ | ☐ | Skala i `config.h` |
 | Bare-metal superloop | ✓ | ✓ | ☐ | ☐ | ☐ | measure/control/safety/CLI |
-| **Vout-PID** | ✓ | ✓ | ☐ | ☐ | ☐ | Primär reglering |
+| **Vout-feedforward + PID-trim** | ✓ | ✓ | ☐ | ☐ | ☐ | Primär reglering |
 | Soft safety latch | ✓ | ✓ | ☐ | ☐ | ☐ | `pwm clear` / cooldown |
 | UART CLI | ✓ | ✓ | ☐ | ☐ | ☐ | Ej i IRQ |
 | Effektivitets-duty-loop | ✓ | ✓ | delvis | ☐ | ☐ | **Av** default |
@@ -41,9 +41,9 @@ Detta dokument är **release-sanning**. Historiska “100 % klart”-dokument li
 ## Nästa steg (mot syftet)
 
 1. Kör [HIL_CHECKLIST.md](docs/HIL_CHECKLIST.md) på Nucleo + effektsteg.  
-2. Kalibrera ADC-skalning för din hårdvara.  
-3. Trimma Vout-PID / setpoint.  
-4. Först därefter: ripple-estimering eller security-profil.
+2. Flytta ström/temperatur från `PA2`/`PA3`, eller acceptera att de krockar med USART2, innan strömtest.  
+3. Kalibrera ADC-skalning så `CURRENT_MAX_A` ryms i pinnen.  
+4. Trimma börvärde på last. Ripple-estimering och security-profil väntar.
 
 ## Aktivera security senare
 

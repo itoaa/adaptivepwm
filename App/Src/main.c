@@ -166,6 +166,11 @@ static bool Initialize_System(void)
                      "ADC init failed", 0);
         return false;
     }
+
+    /* UART claims PA2/PA3 after the ADC has sampled them as current/temp.
+     * On the Nucleo that is the ST-Link VCP. Current and temperature are
+     * not analog once this returns. BKIN pull-up is already set inside
+     * Adaptive_PWM_Init, before the break IRQ is unmasked. */
     
     if (!Adaptive_UART_Init(&uart_handle)) {
         Error_Report(&error_manager, ERR_CLI_AUTH_FAILURE, SEVERITY_WARNING,
@@ -187,7 +192,7 @@ static bool Initialize_System(void)
         Adaptive_UART_SendString(&uart_handle, "Auth: DISABLED (lab)\r\n");
 #endif
 #if FEATURE_VOUT_CONTROL
-        Adaptive_UART_SendString(&uart_handle, "Control: Vout PID\r\n");
+        Adaptive_UART_SendString(&uart_handle, "Control: Vout feedforward + PID trim\r\n");
 #elif FEATURE_EFFICIENCY_CONTROL
         Adaptive_UART_SendString(&uart_handle, "Control: efficiency (experimental)\r\n");
 #else
@@ -338,6 +343,32 @@ void HardFault_Handler(void)
 void DMA2_Stream0_IRQHandler(void)
 {
     HAL_DMA_IRQHandler(&adc_handle.hdma);
+}
+
+void ADC_IRQHandler(void)
+{
+    HAL_ADC_IRQHandler(&adc_handle.hadc);
+}
+
+void TIM1_BRK_TIM9_IRQHandler(void)
+{
+    HAL_TIM_IRQHandler(&pwm_handle.htim);
+}
+
+/* ADC analog watchdog: current channel left the hardware window. */
+void HAL_ADC_LevelOutOfWindowCallback(ADC_HandleTypeDef *hadc)
+{
+    if (hadc->Instance == ADC1) {
+        Tasks_TriggerSafety(&task_manager, 0x02U);
+    }
+}
+
+/* TIM1 BKIN: external comparator already forced the outputs off. */
+void HAL_TIMEx_BreakCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM1) {
+        Tasks_TriggerSafety(&task_manager, 0x02U);
+    }
 }
 
 void USART2_IRQHandler(void)

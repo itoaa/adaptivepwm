@@ -39,7 +39,7 @@ static PowerMeasurement_t power_meas;
 static PID_Controller_t vout_pid;
 static float vout_setpoint_v = VOUT_SETPOINT_DEFAULT_V;
 static bool control_enabled = true;
-static bool safety_fault_latched = false;
+static volatile bool safety_fault_latched = false;
 static uint32_t last_fault_code = 0;
 static uint32_t fault_time_ms = 0;
 static uint32_t pwm_run_since_ms = 0;
@@ -141,12 +141,14 @@ bool Tasks_Init(TaskManager_t* manager)
 
     memset(manager, 0, sizeof(TaskManager_t));
 
-    if (!EfficiencyCalc_Init(&eff_calc_ctx, EFF_MODE_MEASUREMENT, TOPOLOGY_BUCK)) {
+    if (!EfficiencyCalc_Init(&eff_calc_ctx, EFF_MODE_MEASUREMENT,
+                             (ConverterTopology_t)CONVERTER_TOPOLOGY)) {
         return false;
     }
 
+    /* PID output is a duty trim around feedforward, not the duty itself. */
     PID_Init(&vout_pid, DUTY_KP, DUTY_KI, DUTY_KD,
-             PWM_SOFT_MIN_DUTY, PWM_SOFT_MAX_DUTY);
+             -PID_TRIM_MAX, PID_TRIM_MAX);
     PID_SetSetpointWeight(&vout_pid, PID_SETPOINT_WEIGHT);
     PID_SetDerivativeFilter(&vout_pid, PID_DERIVATIVE_FILTER);
     vout_setpoint_v = VOUT_SETPOINT_DEFAULT_V;
@@ -268,14 +270,26 @@ void Tasks_TriggerSafety(TaskManager_t* manager, uint32_t error_code)
     if (manager == NULL) {
         return;
     }
+
+    /* Stop PWM first. Safe to call again from a repeating watchdog IRQ. */
+    Adaptive_PWM_EmergencyStop(&pwm_handle);
+
+    if (safety_fault_latched) {
+        return;
+    }
+
 #ifdef USE_FREERTOS
     xQueueSend(manager->error_queue, &error_code, 0);
 #endif
     manager->system_state = TASK_STATE_ERROR;
     last_fault_code = error_code;
-    safety_fault_latched = true;
     fault_time_ms = HAL_GetTick();
-    Adaptive_PWM_EmergencyStop(&pwm_handle);
+    safety_fault_latched = true;
+    Error_Report(&error_manager,
+                 (error_code == 0x02U) ? ERR_OVER_CURRENT : ERR_PWM_FAULT,
+                 SEVERITY_ERROR,
+                 "Hardware overcurrent or break",
+                 error_code);
 }
 
 uint32_t Tasks_GetStats(const TaskManager_t* manager, char* buffer, uint32_t buffer_size)
@@ -346,19 +360,58 @@ static void Loop_Measure(TaskManager_t* manager)
     }
 }
 
+static float ClampSoftDuty(float duty)
+{
+    if (duty < PWM_SOFT_MIN_DUTY) {
+        return PWM_SOFT_MIN_DUTY;
+    }
+    if (duty > PWM_SOFT_MAX_DUTY) {
+        return PWM_SOFT_MAX_DUTY;
+    }
+    return duty;
+}
+
+/* Ideal duty from Vin and the Vout setpoint. The caller adds the PID trim. */
+static float VoutFeedforwardDuty(float vin, float vout_sp)
+{
+#if !FEEDFORWARD_ENABLED
+    (void)vin;
+    (void)vout_sp;
+    return ClampSoftDuty(current_duty_cycle);
+#else
+    switch ((ConverterTopology_t)CONVERTER_TOPOLOGY) {
+    case TOPOLOGY_BOOST:
+        return Adaptive_PWM_CalculateFeedforward(vin, vout_sp, false);
+    case TOPOLOGY_BUCK_BOOST: {
+        float vin_safe = vin;
+        float vout_safe = vout_sp;
+        if (vin_safe < FEEDFORWARD_VIN_MIN_V) {
+            vin_safe = FEEDFORWARD_VIN_MIN_V;
+        }
+        if (vout_safe < 0.0f) {
+            vout_safe = 0.0f;
+        }
+        return ClampSoftDuty(vout_safe / (vout_safe + vin_safe));
+    }
+    case TOPOLOGY_BUCK:
+    default:
+        return Adaptive_PWM_CalculateFeedforward(vin, vout_sp, true);
+    }
+#endif
+}
+
 static void Loop_Control(TaskManager_t* manager)
 {
     (void)manager;
     ADC_Measurement_t meas;
     const float dt = 1.0f / (float)TASK_FREQ_CONTROL;
 
-    if (!control_enabled || safety_fault_latched) {
+    if (!control_enabled || safety_fault_latched || !pwm_handle.is_running) {
+        /* Next start begins at feedforward, not a wound-up duty. */
+        PID_Reset(&vout_pid);
         return;
     }
     if (!params_ready) {
-        return;
-    }
-    if (!pwm_handle.is_running) {
         return;
     }
 
@@ -370,8 +423,15 @@ static void Loop_Control(TaskManager_t* manager)
     float new_duty = current_duty_cycle;
 
 #if FEATURE_VOUT_CONTROL
-    /* Primary path: regulate measured Vout to setpoint */
-    new_duty = PID_Compute(&vout_pid, vout_setpoint_v, meas.vout, dt);
+    /*
+     * Duty is the ideal converter ratio plus a bounded PID trim.
+     * Applied immediately: the CLI ramp (SetDuty) must not slew this law.
+     */
+    {
+        float d_ff = VoutFeedforwardDuty(meas.vin, vout_setpoint_v);
+        float trim = PID_Compute(&vout_pid, vout_setpoint_v, meas.vout, dt);
+        new_duty = (FEEDFORWARD_GAIN * d_ff) + trim;
+    }
 #elif FEATURE_EFFICIENCY_CONTROL
     {
         float efficiency = EfficiencyCalc_FromMeasurements(
@@ -388,17 +448,18 @@ static void Loop_Control(TaskManager_t* manager)
     (void)eff_calc_ctx;
 #endif
 
-    if (new_duty < PWM_SOFT_MIN_DUTY) {
-        new_duty = PWM_SOFT_MIN_DUTY;
-    }
-    if (new_duty > PWM_SOFT_MAX_DUTY) {
-        new_duty = PWM_SOFT_MAX_DUTY;
-    }
+    new_duty = ClampSoftDuty(new_duty);
 
     if (fabsf(new_duty - current_duty_cycle) > PWM_DUTY_HYSTERESIS) {
+#if FEATURE_VOUT_CONTROL
+        if (Adaptive_PWM_SetDutyImmediate(&pwm_handle, new_duty)) {
+            current_duty_cycle = new_duty;
+        }
+#else
         if (Adaptive_PWM_SetDuty(&pwm_handle, new_duty)) {
             current_duty_cycle = new_duty;
         }
+#endif
     }
 }
 
@@ -421,11 +482,10 @@ static void Loop_Safety(TaskManager_t* manager)
         error_code = 0x01;
     }
 
-    /* Over-current */
-    if (fabsf(meas.current) > CURRENT_MAX_A) {
-        fault = true;
-        error_code = 0x02;
-    }
+    /*
+     * Overcurrent is not polled here. TIM1 BKIN (external comparator)
+     * and the ADC analog watchdog stop the PWM in hardware / IRQ.
+     */
 
     /* Over-voltage (input or output) */
     if (meas.vin > VOLTAGE_MAX_V || meas.vout > VOLTAGE_MAX_V) {
