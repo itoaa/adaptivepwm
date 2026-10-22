@@ -6,8 +6,8 @@ AdaptivePWM ska ge **realtids PWM-reglering** av DC/DC (buck/boost m.fl.) med m�
 
 1. **Styrbar PWM** — 20 kHz-klass, dead-time, duty-gränser, mjuk ramp.  
 2. **Mätning** — Vin, Vout, ström, temperatur med skalning och filtrering.  
-3. **Closed-loop** — i bring-up: **Vout-PID** mot setpoint (mätbar feedback).  
-4. **Safe operating area** — överström/överspänning/temp; mjuk fault + återstart via CLI.  
+3. **Closed-loop** — i bring-up: **feedforward-duty** från Vin och Vout-börvärde, PID bara som trim.  
+4. **Safe operating area** — överström via TIM1 BKIN och ADC-watchdog; överspänning/temp i loopen; återstart via CLI.  
 5. **Observability** — UART-CLI, `monitor`-CSV för HIL och lab.  
 
 ## Sekundära / senare mål

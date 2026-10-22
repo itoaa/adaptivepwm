@@ -1,5 +1,7 @@
 # Safety Protocols
 
+**Bring-up-sanningen är [design.md](design.md) §8, inte detta dokument.** CSS (`HAL_RCC_EnableCSS`) anropas inte i `main.c`. Aktivt skydd är TIM1 BKIN, ADC-watchdog för ström, samt överspänning/övertemp i superloopen. IWDG startas tidigt (`WDG_TIMEOUT_MS` 500) och kickas i superloopen och SysTick.
+
 ## Overview
 
 Safety is paramount in power electronics applications. This document outlines the safety measures implemented in AdaptivePWM v2.1.0, including clock system safety, and guidelines for safe operation.

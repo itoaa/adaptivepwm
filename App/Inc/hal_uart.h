@@ -23,8 +23,11 @@
 // UART Configuration
 #define UART_INSTANCE       USART2
 #define UART_GPIO_PORT      GPIOA
-#define UART_TX_PIN         GPIO_PIN_2   // PA2
-#define UART_RX_PIN         GPIO_PIN_3   // PA3
+/* PA2/PA3 are also ADC current and temperature. UART init runs later and
+ * takes these pins for the ST-Link VCP, so those ADC channels are not
+ * analog while the CLI is up. See docs/HIL_CHECKLIST.md. */
+#define UART_TX_PIN         GPIO_PIN_2   // PA2 — USART2_TX, Nucleo VCP
+#define UART_RX_PIN         GPIO_PIN_3   // PA3 — USART2_RX, Nucleo VCP
 
 // Command buffer
 #define UART_MAX_CMD_LEN    128

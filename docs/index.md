@@ -12,7 +12,7 @@
 | Doc | Innehåll |
 |------|----------|
 | [mål.md](mål.md) | Kärnmål vs sekundära mål |
-| [design.md](design.md) | Superloop, Vout-PID, klocka, dataflöde (**aktuell**) |
+| [design.md](design.md) | Superloop, Vout-feedforward, klocka, pinnar (**aktuell**) |
 | [api.md](api.md) | Modul-API för bring-up (**aktuell**) |
 | [safety.md](safety.md) | Säkerhetsprinciper (komplettera med design §8) |
 | [metoder.md](metoder.md) | Metoder (kort) |

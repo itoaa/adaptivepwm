@@ -26,6 +26,7 @@ Application code lives only under **`App/`** (not a parallel `src/` tree).
 
 ```bash
 # Requires arm-none-eabi-gcc and make on PATH
+# Ubuntu packages: gcc-arm-none-eabi binutils-arm-none-eabi make
 make -j$(nproc)
 
 # Or point at a toolchain:

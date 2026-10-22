@@ -15,7 +15,7 @@ Auth/HMAC/secure-boot-API finns i headers men är **av** via feature-flaggor —
 
 | Funktion | Beskrivning |
 |----------|-------------|
-| `bool Tasks_Init(TaskManager_t* manager)` | Init efficiency ctx, Vout-PID, (RTOS-primitiver om FreeRTOS) |
+| `bool Tasks_Init(TaskManager_t* manager)` | Init efficiency ctx, PID-trim (±`PID_TRIM_MAX`), topologi från `CONVERTER_TOPOLOGY` |
 | `void Tasks_StartScheduler(void)` | **Returnerar inte:** superloop eller FreeRTOS scheduler |
 | `float Tasks_GetVoutSetpoint(void)` | Aktuell Vout-setpoint (V) |
 | `void Tasks_SetVoutSetpoint(float v)` | Sätt setpoint, nollställ PID |
@@ -39,12 +39,13 @@ Auth/HMAC/secure-boot-API finns i headers men är **av** via feature-flaggor —
 
 | Funktion | Beskrivning |
 |----------|-------------|
-| `bool Adaptive_PWM_Init(Adaptive_PWM_t* pwm)` | TIM1 + GPIO + dead-time |
+| `bool Adaptive_PWM_Init(Adaptive_PWM_t* pwm)` | TIM1, PA8/PA9, dead-time, BKIN på PA6 (pull-up innan break-IRQ) |
 | `bool Adaptive_PWM_Start` / `Stop` | Start/stopp utgångar |
 | `bool Adaptive_PWM_SetDuty(pwm, float duty)` | 0…1 med ramp, soft/hard limits, hysteres |
 | `bool Adaptive_PWM_SetDutyImmediate(...)` | Utan ramp |
 | `float Adaptive_PWM_GetDuty` / `GetFrequency` | Avläsning |
-| `void Adaptive_PWM_EmergencyStop` | Snabb stopp |
+| `float Adaptive_PWM_CalculateFeedforward(vin, vout, is_buck)` | Buck eller boost, klampad till soft duty. Buck-boost räknas i loopen |
+| `void Adaptive_PWM_EmergencyStop` | Snabb stopp. Anropas från break-IRQ och ADC-watchdog |
 
 **Konstanter:** `PWM_FREQUENCY_HZ`, `PWM_SOFT_*`, `PWM_HARD_*`, `PWM_RAMP_*` i `config.h`.
 
@@ -64,7 +65,8 @@ typedef struct {
 
 | Funktion | Beskrivning |
 |----------|-------------|
-| `bool Adaptive_ADC_Init` | ADC1 + DMA-setup |
+| `bool Adaptive_ADC_Init` | ADC1 + DMA. Armerar analog watchdog på strömkanalen |
+| `bool Adaptive_ADC_ArmOvercurrentWatchdog` | Hårdvarutröskel för `CURRENT_MAX_A` (kanal 2) |
 | `bool Adaptive_ADC_Start_DMA` / `Stop_DMA` | Kontinuerlig sampling |
 | `void Adaptive_ADC_ProcessBuffer` | Rå DMA → filtrerade mätvärden (**anropas i Loop_Measure**) |
 | `bool Adaptive_ADC_CheckDMAComplete` | ISR-flagga (clear-on-read) |
@@ -84,7 +86,7 @@ typedef struct {
 
 | Funktion | Beskrivning |
 |----------|-------------|
-| `bool Adaptive_UART_Init` | USART2 115200 |
+| `bool Adaptive_UART_Init` | USART2 115200 på PA2/PA3 (tar över ADC-ström/temp på Nucleo) |
 | `bool Adaptive_UART_SendString` / `Printf` | TX (kan blockera — använd utanför ISR) |
 | `bool Adaptive_UART_SendString_NonBlocking` | ISR-vänligare TX |
 | `void Adaptive_UART_ProcessRX` | Anropas från UART RX IRQ |
@@ -243,7 +245,7 @@ HMAC-varianter (`flash_logger_hmac.h`) styrs av `FEATURE_FLASH_LOGGER_HMAC` (def
 
 | Makro | Default | Effekt |
 |-------|---------|--------|
-| `FEATURE_VOUT_CONTROL` | 1 | Vout-PID i Loop_Control |
+| `FEATURE_VOUT_CONTROL` | 1 | Feedforward + PID-trim i Loop_Control |
 | `FEATURE_EFFICIENCY_CONTROL` | 0 | η-duty |
 | `FEATURE_SWITCH_RIPPLE_ESTIMATION` | 0 | L/C/ESR i ParamCalc |
 | `FEATURE_CLI_AUTH` | 0 | Lösenordskrav |

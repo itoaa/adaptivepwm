@@ -235,10 +235,17 @@
 #define SAFETY_VIN_UV_ENABLE        0
 #endif
 
-// Current limits
+/*
+ * Overcurrent threshold for the ADC watchdog (raw pin counts).
+ * Full-scale amps = 3.3 V / ADC_CURRENT_V_PER_AMP. The lab default
+ * (10 A at 1 V/A) is above that span, so the watchdog high threshold
+ * sits at full scale and a legal conversion cannot trip. Set
+ * ADC_CURRENT_V_PER_AMP so CURRENT_MAX_A is inside the pin range
+ * before a current test. Cycle-by-cycle stop is still TIM1 BKIN (PA6).
+ */
 #define CURRENT_MAX_A               10.0f
 #define CURRENT_WARNING_A           8.0f
-#define CURRENT_SENSE_OHMS          0.01f       // 10 mOhm shunt (info; scale via ADC_CURRENT_V_PER_AMP)
+#define CURRENT_SENSE_OHMS          0.01f       /* info only; scale is ADC_CURRENT_V_PER_AMP */
 
 // Temperature limits
 #define TEMP_WARNING_C              75.0f

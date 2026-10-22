@@ -10,8 +10,8 @@ Målet är en **inbyggd regulator** som:
 
 1. **Mäter** spänning, ström och temperatur (ADC + filter).
 2. **Styr** PWM (TIM1, dead-time, ramping) så att utgången hålls i ett säkert och effektivt arbetsläge.
-3. **Reglerar utspänning** (Vout-PID) som primär feedback — mätbar och användbar på riktig hårdvara.
-4. **Håller safe operating area** — gränser för ström/spänning/temp, mjuk fault-latch (ingen oändlig hang).
+3. **Reglerar utspänning** — ideal duty från Vin och börvärde (feedforward), PID bara som trim.  
+4. **Håller safe operating area** — överström i hårdvara (TIM1 BKIN + ADC-watchdog), överspänning/temp i mjukvara, mjuk fault-latch.
 5. **Ger labb-/fältverktyg** — UART-CLI (`status`, `pwm`, `monitor`, `config vout`, …).
 6. **Lämnar utrymme för senare hårdning** — auth, HMAC, secure boot som *valfria* flaggor (av som default).
 
@@ -19,8 +19,8 @@ Historiskt nämns också realtids-L/C/ESR och ren “effektivitetsjakt”; det �
 
 | Mål (kärna) | Status i bring-up |
 |-------------|-------------------|
-| PWM + mätning + Vout-reglering | Kod + superloop; HIL på last kvarstår |
-| Säkerhetsgränser + soft recovery | I loopen; validera på hårdvara |
+| PWM + mätning + Vout-feedforward | Kod + superloop; HIL på last kvarstår |
+| Överström via BKIN/ADC-watchdog, övriga gränser i loopen | Kod; validera på hårdvara |
 | Effektivitet / L-C från ripple | Av default (fysik/sampling) |
 | Security (login, secure boot, …) | Option, av default |
 
@@ -29,8 +29,8 @@ Historiskt nämns också realtids-L/C/ESR och ren “effektivitetsjakt”; det �
 Primär väg: **Makefile / STM32CubeIDE** (inte PlatformIO).
 
 ```bash
-# Behöver arm-none-eabi-gcc + make
-make -j8
+# Ubuntu: sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi make
+make -j"$(nproc)"
 # → build/cubeide/AdaptivePWM.{elf,bin,hex}
 ```
 
@@ -58,14 +58,26 @@ Allt “tungt” styrs i **`config/features.h`** (default = bring-up):
 
 | Flagga | Default | Betydelse |
 |--------|---------|-----------|
-| `FEATURE_VOUT_CONTROL` | 1 | Vout-PID (primär reglering) |
+| `FEATURE_VOUT_CONTROL` | 1 | Vout-feedforward + PID-trim |
 | `FEATURE_EFFICIENCY_CONTROL` | 0 | Experimentell η→duty (av) |
 | `FEATURE_SWITCH_RIPPLE_ESTIMATION` | 0 | L/C/ESR från ripple (av) |
 | `FEATURE_SECURITY_PROFILE` | 0 | Master för auth/HMAC m.m. |
 | `FEATURE_CLI_AUTH` | 0 | UART-lösenord |
 | `FEATURE_SOFT_FAULT_RECOVERY` | 1 | Mjuk recovery efter fault |
 
-ADC-skalning (divider, V/A): `App/Inc/config.h` (`ADC_VIN_DIVIDER_RATIO`, …).
+ADC-skalning, topologi och strömgräns: `App/Inc/config.h`.
+
+| Konstant | Default | Betydelse |
+|----------|---------|-----------|
+| `CONVERTER_TOPOLOGY` | 0 (buck) | 0 buck `Vout/Vin`, 1 boost `1-Vin/Vout`, 2 buck-boost |
+| `VOUT_SETPOINT_DEFAULT_V` | 1,5 V | Labbbörvärde i pin-domän |
+| `ADC_*_DIVIDER_RATIO` | 1,0 | Pin-volt → riktig spänning |
+| `ADC_CURRENT_V_PER_AMP` | 1,0 | Volt på strömpinnen per ampere |
+| `CURRENT_MAX_A` | 10 A | Watchdog-tröskel. Vid 1 V/A ryms inte 10 A i 3,3 V — sätt skalan innan strömtest |
+
+**Nucleo-pinnar:** PWM `PA8`/`PA9`, BKIN `PA6` (aktiv låg, pull-up), Vin `PA0`, Vout `PA1`. USART2 (ST-Link, 115200) tar `PA2`/`PA3` **efter** ADC-init, så ström och temperatur på de pinnarna mäts inte medan CLI:t är igång. Se [docs/HIL_CHECKLIST.md](docs/HIL_CHECKLIST.md).
+
+Värd-CLI:t i `cli/` öppnar inte serieporten. Labbet styrs av firmware-CLI:t ovan.
 
 ## Repostruktur
 
